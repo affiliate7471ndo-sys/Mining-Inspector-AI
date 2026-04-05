@@ -6,18 +6,38 @@ import time
 st.set_page_config(page_title="Universal Mining AI Diagnostic", layout="wide")
 
 # --- ENGINE DIAGNOSA MURNI (TANPA HAPUS BACKGROUND) ---
-def pure_diagnostic_engine(image_bytes, category):
-    # Simulasi AI Computer Vision menganalisis piksel asli (termasuk debu, oli, dan tanah)
-    time.sleep(2) 
+import google.generativeai as genai
+
+# Masukkan API Key Anda di sini
+genai.configure(api_key="gen-lang-client-0721140806")
+
+def pure_diagnostic_engine(image_bytes, brand, model, category):
+    # Konfigurasi Model Vision
+    model_ai = genai.GenerativeModel('gemini-1.5-flash')
     
-    # Database Logika Standar Global
-    db_logic = {
-        "Undercarriage": {"score": 55, "status": "Warning", "note": "Keausan pada sproket dan track link. Terlihat tumpukan lumpur keras yang mengganggu pergerakan."},
-        "Tyre": {"score": 30, "status": "Critical", "note": "Sayatan dalam pada dinding ban (Sidewall cut) sepanjang 15cm. Risiko pecah tinggi."},
-        "Hydraulic": {"score": 85, "status": "Good", "note": "Silinder hidrolik kering. Tidak ada indikasi rembesan oli pada area sekitar."},
-        "Engine Area": {"score": 70, "status": "Check", "note": "Warna blok mesin mengindikasikan *overheating* ringan. Cek sistem pendingin."}
-    }
-    return db_logic.get(category, {"score": 95, "status": "Normal", "note": "Komponen dalam batas toleransi aman."})
+    # Instruksi Spesifik untuk Tambang (Prompt Engineering)
+    prompt = f"""
+    Anda adalah Inspektur Alat Berat Senior. Analisa foto komponen {category} 
+    pada unit {brand} tipe {model} ini. 
+    1. Jika ada layar monitor, baca angka/parameter yang muncul (suhu, voltase, tekanan).
+    2. Jika ada komponen fisik, cari indikasi aus, retak, atau bocor.
+    3. Berikan skor kesehatan (0-100).
+    4. Berikan status (Good/Warning/Critical) dan temuan singkat maksimal 2 kalimat.
+    Format jawaban harus JSON: {{"score": angka, "status": "teks", "note": "teks"}}
+    """
+    
+    # Kirim ke AI
+    img = Image.open(io.BytesIO(image_bytes))
+    response = model_ai.generate_content([prompt, img])
+    
+    # Parsing hasil (Sederhana)
+    try:
+        # Membersihkan teks agar menjadi JSON murni
+        clean_res = response.text.replace('```json', '').replace('```', '').strip()
+        import json
+        return json.loads(clean_res)
+    except:
+        return {"score": 0, "status": "Error", "note": "Gagal membaca gambar secara teknis."}
 
 # --- ANTARMUKA PENGGUNA ---
 st.title("🚜 Mining Inspector AI")
