@@ -15,9 +15,6 @@ except Exception as e:
 # --- 2. ENGINE DIAGNOSA MURNI (LOGIKA AI) ---
 def pure_diagnostic_engine(image_bytes, brand, model_name, category):
     try:
-        # Inisialisasi Model
-        model_ai = genai.GenerativeModel('gemini-1.5-flash')
-        
         prompt = f"""Anda adalah Inspektur Alat Berat Senior. Analisa foto {category} unit {brand} {model_name}. 
         1. Baca indikator panel monitor jika ada (RPM, Temp, Voltase).
         2. Cari anomali fisik (aus, retak, bocor).
@@ -25,38 +22,55 @@ def pure_diagnostic_engine(image_bytes, brand, model_name, category):
         Format jawaban WAJIB JSON murni: {{"score": angka, "status": "teks", "note": "teks"}}"""
         
         img = Image.open(io.BytesIO(image_bytes))
-        response = model_ai.generate_content([prompt, img])
+        
+        # --- LOGIKA AUTO-FALLBACK ---
+        # Sistem akan mencoba pintu model AI satu per satu sampai berhasil
+        models_to_try = [
+            'gemini-1.5-flash-latest',
+            'gemini-1.5-pro-latest',
+            'gemini-1.5-flash',
+            'gemini-1.5-pro',
+            'gemini-pro-vision'
+        ]
+        
+        response = None
+        for m_id in models_to_try:
+            try:
+                model_ai = genai.GenerativeModel(m_id)
+                response = model_ai.generate_content([prompt, img])
+                break # Jika berhasil menembus, hentikan pencarian
+            except:
+                continue # Jika gagal (404 dll), lanjut ke model berikutnya
+                
+        if response is None:
+             return {"score": 0, "status": "Error", "note": "Semua jalur model Vision ditolak oleh server Google untuk API Key ini."}
         
         # Membersihkan output AI dari karakter markdown
         clean_res = response.text.replace('```json', '').replace('```', '').strip()
         return json.loads(clean_res)
         
     except Exception as e:
-        return {"score": 0, "status": "Error", "note": f"AI Error: {str(e)}"}
+        return {"score": 0, "status": "Error", "note": f"System Error: {str(e)}"}
 
 # --- 3. ANTARMUKA PENGGUNA ---
 st.set_page_config(page_title="Mining Inspector AI", layout="wide")
 st.title("🚜 Mining Inspector AI")
 st.subheader("Sistem Analisis Visual Kerusakan Alat Berat")
 
-# Parameter Input Lapangan
 with st.sidebar:
     st.header("📋 Parameter Unit")
     brand = st.text_input("Merek Unit", placeholder="Contoh: Tatsuo, AIMIX, Komatsu...")
     model_name = st.text_input("Tipe/Model", placeholder="Contoh: T-200, PC200...")
     comp = st.selectbox("Komponen Diperiksa", ["Engine Area", "Undercarriage", "Tyre", "Hydraulic"])
     st.divider()
-    st.warning("⚠️ Instruksi: Foto komponen dari jarak dekat tanpa menggunakan filter kamera.")
+    st.warning("⚠️ Instruksi: Foto komponen dari jarak dekat tanpa filter.")
 
-# Area Upload
 uploaded_file = st.file_uploader("Upload Foto Aktual Komponen", type=["jpg", "jpeg", "png"])
 
 if uploaded_file and brand:
-    # Tampilkan Foto Asli
     img = Image.open(uploaded_file)
     st.image(img, caption=f"Konteks Lapangan: {brand} {model_name}", width=500)
 
-    # State management
     if 'result' not in st.session_state:
         st.session_state.result = None
     if 'analyzed' not in st.session_state:
@@ -74,7 +88,6 @@ if uploaded_file and brand:
             st.session_state.analyzed = True
             status.update(label="Analisis Selesai", state="complete")
 
-    # Tampilkan Hasil Analisis
     if st.session_state.analyzed and st.session_state.result:
         st.divider()
         res = st.session_state.result
@@ -93,7 +106,6 @@ if uploaded_file and brand:
             st.subheader("Temuan AI")
             st.write(res.get('note', 'Tidak ada catatan.'))
 
-        # --- LAPORAN ---
         st.divider()
         st.write("### 📄 Unduh Laporan Inspeksi Digital")
         if st.button("Generate Laporan & Rekomendasi Part"):
