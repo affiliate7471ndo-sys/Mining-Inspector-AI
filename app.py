@@ -3,6 +3,8 @@ import requests
 import base64
 import json
 import time
+import uuid
+from datetime import datetime
 from fpdf import FPDF
 
 # --- 1. KONFIGURASI API ---
@@ -17,7 +19,6 @@ def pure_diagnostic_engine(image_bytes, brand, model_name, category):
         return {"score": 0, "status": "Error", "note": "API Key kosong. Silakan isi di Secrets Streamlit."}
 
     try:
-        # TAHAP 1: AUTO-DISCOVERY MODEL
         list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
         list_res = requests.get(list_url)
         
@@ -30,16 +31,14 @@ def pure_diagnostic_engine(image_bytes, brand, model_name, category):
         for m in available_models:
             methods = m.get('supportedGenerationMethods', [])
             name = m.get('name', '') 
-            
             if 'generateContent' in methods:
                 if 'flash' in name or 'pro' in name or 'vision' in name:
                     chosen_model = name
                     break
         
         if not chosen_model:
-            return {"score": 0, "status": "Error", "note": "API Key Anda tidak memiliki akses ke model Vision/AI apapun."}
+            return {"score": 0, "status": "Error", "note": "API Key Anda tidak memiliki akses ke model Vision/AI."}
 
-        # TAHAP 2: EKSEKUSI DIAGNOSA (DENGAN PROMPT ESTIMASI HARGA)
         prompt = f"""Anda adalah Inspektur Alat Berat Senior sekaligus Technical Sales Advisor. 
         Analisa foto {category} unit {brand} {model_name}. 
         1. Baca indikator panel monitor jika ada (RPM, Temp, Voltase).
@@ -111,12 +110,7 @@ if uploaded_file and brand:
 
     if st.button("🔍 Jalankan Analisis Visual AI"):
         with st.status("Menghubungkan ke Server Pusat & Memindai Anomali...", expanded=True) as status:
-            res = pure_diagnostic_engine(
-                uploaded_file.getvalue(), 
-                brand, 
-                model_name, 
-                comp
-            )
+            res = pure_diagnostic_engine(uploaded_file.getvalue(), brand, model_name, comp)
             st.session_state.result = res
             st.session_state.analyzed = True
             status.update(label="Analisis Selesai", state="complete")
@@ -140,75 +134,103 @@ if uploaded_file and brand:
             st.subheader("Temuan Teknis AI")
             st.write(res.get('note', 'Tidak ada catatan anomali.'))
 
-        # Menampilkan UI Rekomendasi Part
-        st.subheader("🛠️ Rekomendasi Suku Cadang")
         parts = res.get('parts_recommendation', [])
-        if parts:
-            for p in parts:
-                st.info(f"**{p.get('part_name', 'Part Unknown')}** — Estimasi: {p.get('est_price', 'N/A')}")
-        else:
-            st.write("Tidak ada penggantian part mendesak berdasarkan temuan visual saat ini.")
-
-        # --- 4. GENERATOR LAPORAN PDF (FPDF) ---
+        
+        # --- 4. GENERATOR LAPORAN PDF VISUAL BRANDING ---
         st.divider()
         st.write("### 📄 Unduh Laporan Inspeksi Digital")
         
-        if st.button("Generate Laporan & Penawaran Part"):
-            with st.spinner("Menyusun dokumen penawaran resmi..."):
+        if st.button("Generate Laporan & Penawaran Part Resmi"):
+            with st.spinner("Mencetak dokumen resmi dengan Digital Stamp..."):
                 pdf = FPDF()
                 pdf.add_page()
                 
-                pdf.set_font("Arial", "B", 16)
-                pdf.cell(200, 10, txt="LAPORAN INSPEKSI & PENAWARAN SUKU CADANG", ln=True, align="C")
+                # --- HEADER BRANDING (LOGO) ---
+                try:
+                    pdf.image('logo.png', 10, 8, 30) 
+                except:
+                    pass 
+                
+                pdf.set_font("Arial", "B", 18)
+                pdf.set_text_color(41, 128, 185) 
+                pdf.cell(0, 10, txt="OFFICIAL INSPECTION REPORT", ln=True, align="R")
+                
                 pdf.set_font("Arial", "I", 10)
-                pdf.cell(200, 10, txt=f"Official Report for {brand.upper()} Ecosystem", ln=True, align="C")
-                pdf.ln(10)
+                pdf.set_text_color(128, 128, 128) 
+                pdf.cell(0, 5, txt="Tatsuo & AIMIX Heavy Equipment Ecosystem", ln=True, align="R")
                 
-                pdf.set_font("Arial", "B", 12)
-                pdf.cell(0, 10, txt="DETAIL UNIT:", ln=True)
-                pdf.set_font("Arial", "", 12)
-                pdf.cell(0, 8, txt=f"Unit      : {brand.upper()} {model_name.upper()}", ln=True)
-                pdf.cell(0, 8, txt=f"Kategori  : {comp}", ln=True)
-                pdf.ln(5)
+                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                pdf.cell(0, 5, txt=f"Generated: {current_time}", ln=True, align="R")
                 
+                pdf.set_draw_color(41, 128, 185)
+                pdf.set_line_width(0.5)
+                pdf.line(10, 35, 200, 35)
+                pdf.ln(15)
+                
+                # --- KONTEN UTAMA ---
+                pdf.set_text_color(0, 0, 0)
+                pdf.set_fill_color(240, 240, 240) 
                 pdf.set_font("Arial", "B", 12)
-                pdf.cell(0, 10, txt="ANALISIS TEKNIS:", ln=True)
+                pdf.cell(0, 10, txt="  DATA UNIT LOKASI", border=1, ln=True, fill=True)
+                
                 pdf.set_font("Arial", "", 11)
+                pdf.cell(0, 8, txt=f"  Merek/Model : {brand.upper()} {model_name.upper()}", border="LR", ln=True)
+                pdf.cell(0, 8, txt=f"  Komponen    : {comp}", border="LR", ln=True)
+                pdf.cell(0, 8, txt=f"  Health Score: {res.get('score', 0)}%  |  Status: {status_text}", border="LRB", ln=True)
+                pdf.ln(8)
                 
-                # Membersihkan teks untuk FPDF agar tidak error membaca karakter aneh
-                safe_note = str(res.get('note', 'Tidak ada catatan khusus.')).encode('latin-1', 'replace').decode('latin-1')
+                pdf.set_font("Arial", "B", 12)
+                pdf.cell(0, 10, txt="  TEMUAN TEKNIS LAPANGAN", ln=True)
+                pdf.set_font("Arial", "", 11)
+                safe_note = str(res.get('note', 'Tidak ada catatan.')).encode('latin-1', 'replace').decode('latin-1')
                 pdf.multi_cell(0, 7, txt=safe_note)
-                pdf.ln(5)
+                pdf.ln(8)
                 
-                # Cek jika ada rekomendasi part untuk dimasukkan ke tabel
+                # --- TABEL SUKU CADANG ---
                 if parts:
                     pdf.set_font("Arial", "B", 12)
-                    pdf.cell(0, 10, txt="REKOMENDASI SUKU CADANG & ESTIMASI BIAYA:", ln=True)
+                    pdf.cell(0, 10, txt="  REKOMENDASI SUKU CADANG & ESTIMASI BIAYA", ln=True)
                     
-                    # Header Tabel
                     pdf.set_font("Arial", "B", 10)
-                    pdf.cell(130, 10, "Deskripsi Part", 1)
-                    pdf.cell(60, 10, "Estimasi Harga (IDR)", 1, ln=True)
+                    pdf.set_fill_color(41, 128, 185)
+                    pdf.set_text_color(255, 255, 255)
+                    pdf.cell(130, 10, "Deskripsi Part", border=1, fill=True)
+                    pdf.cell(60, 10, "Estimasi Harga (IDR)", border=1, ln=True, fill=True)
                     
-                    # Isi Tabel
                     pdf.set_font("Arial", "", 10)
+                    pdf.set_text_color(0, 0, 0)
                     for p in parts:
                         part_name = str(p.get('part_name', 'Unknown')).encode('latin-1', 'replace').decode('latin-1')
                         est_price = str(p.get('est_price', 'N/A')).encode('latin-1', 'replace').decode('latin-1')
-                        
-                        pdf.cell(130, 10, part_name, 1)
-                        pdf.cell(60, 10, est_price, 1, ln=True)
+                        pdf.cell(130, 10, part_name, border=1)
+                        pdf.cell(60, 10, est_price, border=1, ln=True)
                     
-                    pdf.ln(10)
+                    pdf.ln(5)
                     pdf.set_font("Arial", "I", 9)
-                    pdf.multi_cell(0, 5, txt="*Harga di atas adalah estimasi sistem AI. Silakan hubungi dealer resmi untuk penawaran final.")
+                    pdf.set_text_color(128, 128, 128)
+                    pdf.multi_cell(0, 5, txt="*Harga adalah estimasi sistem AI. Hubungi dealer untuk penawaran final.")
+                
+                # --- DIGITAL STAMP FOOTER ---
+                pdf.ln(15)
+                pdf.set_draw_color(200, 200, 200)
+                pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+                pdf.ln(5)
+                
+                doc_id = str(uuid.uuid4()).split('-')[0].upper()
+                pdf.set_font("Arial", "B", 8)
+                pdf.set_text_color(0, 0, 0)
+                pdf.cell(0, 5, txt="DIGITAL AUTHORIZATION STAMP", ln=True)
+                pdf.set_font("Arial", "", 8)
+                pdf.cell(0, 5, txt=f"Document ID : TA-{doc_id}-{int(time.time())}", ln=True)
+                pdf.cell(0, 5, txt="Verified By : System VORTEX / Mining Inspector Engine", ln=True)
+                pdf.cell(0, 5, txt="Status      : SYSTEM GENERATED - NO SIGNATURE REQUIRED", ln=True)
                 
                 pdf_bytes = pdf.output(dest='S').encode('latin-1')
                 
-                st.success("Laporan Penawaran berhasil dibuat!")
+                st.success("Dokumen Resmi berhasil dicetak!")
                 st.download_button(
-                    label="📥 Download Penawaran Suku Cadang (PDF)", 
+                    label="📥 Download Official Report (PDF)", 
                     data=pdf_bytes, 
-                    file_name=f"Penawaran_{brand}_{model_name}.pdf",
+                    file_name=f"Inspeksi_{brand}_{model_name}_{doc_id}.pdf",
                     mime="application/pdf"
                 )
