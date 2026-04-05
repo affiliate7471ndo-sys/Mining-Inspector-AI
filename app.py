@@ -6,11 +6,17 @@ import time
 import json
 
 # --- 1. KONFIGURASI API ---
+# LOGIKA BARU YANG LEBIH TAHAN ERROR:
 try:
-    api_key = st.secrets["GOOGLE_API_KEY"]
-    genai.configure(api_key=api_key)
+    # Model terbaru dan tercepat
+    model_ai = genai.GenerativeModel('gemini-1.5-flash-latest')
 except:
-    st.error("⚠️ API Key belum diset di Secrets Streamlit!")
+    try:
+        # Nama model alternatif untuk beberapa region API
+        model_ai = genai.GenerativeModel('gemini-1.5-flash')
+    except:
+        # Cadangan terakhir jika model Flash belum tersedia
+        model_ai = genai.GenerativeModel('gemini-pro-vision')
 
 # --- 2. ENGINE DIAGNOSA MURNI (LOGIKA AI) ---
 def pure_diagnostic_engine(image_bytes, brand, model_name, category):
