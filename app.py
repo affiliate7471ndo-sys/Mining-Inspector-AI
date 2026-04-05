@@ -1,54 +1,65 @@
 import streamlit as st
-import google.generativeai as genai
-from PIL import Image
-import io
+import requests
+import base64
 import json
 import time
 
 # --- 1. KONFIGURASI API ---
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
-    genai.configure(api_key=api_key)
-except Exception as e:
+except:
+    api_key = ""
     st.error("⚠️ API Key belum diset di Secrets Streamlit!")
 
-# --- 2. ENGINE DIAGNOSA MURNI (LOGIKA AI) ---
+# --- 2. ENGINE DIAGNOSA MURNI (DIRECT REST API BYPASS) ---
 def pure_diagnostic_engine(image_bytes, brand, model_name, category):
+    if not api_key:
+        return {"score": 0, "status": "Error", "note": "API Key kosong. Silakan isi di Secrets."}
+
     try:
         prompt = f"""Anda adalah Inspektur Alat Berat Senior. Analisa foto {category} unit {brand} {model_name}. 
         1. Baca indikator panel monitor jika ada (RPM, Temp, Voltase).
         2. Cari anomali fisik (aus, retak, bocor).
         3. Berikan skor 0-100, status (Good/Warning/Critical), dan temuan teknis singkat.
         Format jawaban WAJIB JSON murni: {{"score": angka, "status": "teks", "note": "teks"}}"""
+
+        # Ubah gambar menjadi kode Base64 agar bisa ditransfer lewat internet langsung
+        base64_img = base64.b64encode(image_bytes).decode('utf-8')
+
+        # Tembak langsung ke Endpoint resmi Gemini 1.5 Flash
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
         
-        img = Image.open(io.BytesIO(image_bytes))
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": prompt},
+                    {
+                        "inline_data": {
+                            "mime_type": "image/jpeg",
+                            "data": base64_img
+                        }
+                    }
+                ]
+            }]
+        }
         
-        # --- LOGIKA AUTO-FALLBACK ---
-        # Sistem akan mencoba pintu model AI satu per satu sampai berhasil
-        models_to_try = [
-            'gemini-1.5-flash-latest',
-            'gemini-1.5-pro-latest',
-            'gemini-1.5-flash',
-            'gemini-1.5-pro',
-            'gemini-pro-vision'
-        ]
+        headers = {"Content-Type": "application/json"}
         
-        response = None
-        for m_id in models_to_try:
-            try:
-                model_ai = genai.GenerativeModel(m_id)
-                response = model_ai.generate_content([prompt, img])
-                break # Jika berhasil menembus, hentikan pencarian
-            except:
-                continue # Jika gagal (404 dll), lanjut ke model berikutnya
-                
-        if response is None:
-             return {"score": 0, "status": "Error", "note": "Semua jalur model Vision ditolak oleh server Google untuk API Key ini."}
+        # Eksekusi pengiriman data
+        response = requests.post(url, headers=headers, json=payload)
         
-        # Membersihkan output AI dari karakter markdown
-        clean_res = response.text.replace('```json', '').replace('```', '').strip()
-        return json.loads(clean_res)
-        
+        # Evaluasi Hasil
+        if response.status_code == 200:
+            data = response.json()
+            raw_text = data['candidates'][0]['content']['parts'][0]['text']
+            
+            # Bersihkan format JSON
+            clean_res = raw_text.replace('```json', '').replace('```', '').strip()
+            return json.loads(clean_res)
+        else:
+            # Jika Google masih menolak, kita akan tahu alasannya dengan sangat persis
+            return {"score": 0, "status": "Error", "note": f"Penolakan Server: {response.text}"}
+            
     except Exception as e:
         return {"score": 0, "status": "Error", "note": f"System Error: {str(e)}"}
 
@@ -68,8 +79,8 @@ with st.sidebar:
 uploaded_file = st.file_uploader("Upload Foto Aktual Komponen", type=["jpg", "jpeg", "png"])
 
 if uploaded_file and brand:
-    img = Image.open(uploaded_file)
-    st.image(img, caption=f"Konteks Lapangan: {brand} {model_name}", width=500)
+    # Karena kita tidak butuh PIL lagi untuk AI, kita hanya pakai st.image bawaan Streamlit
+    st.image(uploaded_file, caption=f"Konteks Lapangan: {brand} {model_name}", width=500)
 
     if 'result' not in st.session_state:
         st.session_state.result = None
@@ -77,7 +88,7 @@ if uploaded_file and brand:
         st.session_state.analyzed = False
 
     if st.button("🔍 Jalankan Analisis Visual AI"):
-        with st.status("Memindai anomali struktural...", expanded=True) as status:
+        with st.status("Memindai anomali via Direct API...", expanded=True) as status:
             res = pure_diagnostic_engine(
                 uploaded_file.getvalue(), 
                 brand, 
@@ -100,6 +111,7 @@ if uploaded_file and brand:
             status_text = res.get('status', 'Unknown')
             if status_text == "Critical": st.error(status_text)
             elif status_text == "Warning": st.warning(status_text)
+            elif status_text == "Error": st.error(status_text)
             else: st.success(status_text)
             
         with c3:
