@@ -25,8 +25,7 @@ except:
         model_ai = genai.GenerativeModel('gemini-1.5-flash')
     except:
         # Cadangan terakhir jika model Flash belum tersedia
-        model_ai = genai.GenerativeModel('gemini-pro-vision')
-        
+        model_ai = genai.GenerativeModel('gemini-pro-vision')        
 # --- 3. ANTARMUKA PENGGUNA ---
 st.set_page_config(page_title="Mining Inspector AI", layout="wide")
 st.title("🚜 Mining Inspector AI")
