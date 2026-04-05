@@ -1,45 +1,47 @@
 import streamlit as st
-from PIL import Image
-import time
-
-# --- KONFIGURASI ENGINE ---
-st.set_page_config(page_title="Universal Mining AI Diagnostic", layout="wide")
-
-# --- ENGINE DIAGNOSA MURNI (TANPA HAPUS BACKGROUND) ---
 import google.generativeai as genai
+from PIL import Image
+import io
+import time
+import json
 
-# Masukkan API Key Anda di sini
-genai.configure(api_key="gen-lang-client-0721140806")
+# --- 1. KONFIGURASI API (Hanya satu kali) ---
+try:
+    # Mengambil kunci dari Secrets Streamlit secara aman
+    api_key = st.secrets["GOOGLE_API_KEY"]
+    genai.configure(api_key=api_key)
+except:
+    st.error("API Key belum diset di Secrets Streamlit!")
 
+# --- 2. ENGINE DIAGNOSA MURNI ---
 def pure_diagnostic_engine(image_bytes, brand, model, category):
-    # Konfigurasi Model Vision
-    model_ai = genai.GenerativeModel('gemini-1.5-flash')
-    
-    # Instruksi Spesifik untuk Tambang (Prompt Engineering)
-    prompt = f"""
-    Anda adalah Inspektur Alat Berat Senior. Analisa foto komponen {category} 
-    pada unit {brand} tipe {model} ini. 
-    1. Jika ada layar monitor, baca angka/parameter yang muncul (suhu, voltase, tekanan).
-    2. Jika ada komponen fisik, cari indikasi aus, retak, atau bocor.
-    3. Berikan skor kesehatan (0-100).
-    4. Berikan status (Good/Warning/Critical) dan temuan singkat maksimal 2 kalimat.
-    Format jawaban harus JSON: {{"score": angka, "status": "teks", "note": "teks"}}
-    """
-    
-    # Kirim ke AI
-    img = Image.open(io.BytesIO(image_bytes))
-    response = model_ai.generate_content([prompt, img])
-    
-    # Parsing hasil (Sederhana)
     try:
-        # Membersihkan teks agar menjadi JSON murni
+        # Konfigurasi Model Vision
+        model_ai = genai.GenerativeModel('gemini-1.5-flash')
+        
+        # Prompt Engineering yang tajam
+        prompt = f"""
+        Anda adalah Inspektur Alat Berat Senior. Analisa foto komponen {category} 
+        pada unit {brand} tipe {model} ini. 
+        1. Jika ada layar monitor/panel, baca angka RPM, Suhu, Voltase, dan Tekanan.
+        2. Jika ada komponen fisik, cari indikasi aus, retak, kebocoran oli, atau kerusakan.
+        3. Berikan skor kesehatan (0-100).
+        4. Berikan status (Good/Warning/Critical) dan temuan singkat maksimal 2 kalimat.
+        Format jawaban WAJIB JSON murni: {{"score": angka, "status": "teks", "note": "teks"}}
+        """
+        
+        # Kirim ke AI
+        img = Image.open(io.BytesIO(image_bytes))
+        response = model_ai.generate_content([prompt, img])
+        
+        # Bersihkan hasil dari Markdown jika ada
         clean_res = response.text.replace('```json', '').replace('```', '').strip()
-        import json
         return json.loads(clean_res)
-    except:
-        return {"score": 0, "status": "Error", "note": "Gagal membaca gambar secara teknis."}
+    except Exception as e:
+        return {"score": 0, "status": "Error", "note": f"Gagal membaca gambar: {str(e)}"}
 
-# --- ANTARMUKA PENGGUNA ---
+# --- 3. ANTARMUKA PENGGUNA ---
+st.set_page_config(page_title="Mining Inspector AI", layout="wide")
 st.title("🚜 Mining Inspector AI")
 st.subheader("Sistem Analisis Visual Kerusakan Alat Berat")
 
@@ -48,7 +50,7 @@ with st.sidebar:
     st.header("📋 Parameter Unit")
     brand = st.text_input("Merek Unit", placeholder="Contoh: Tatsuo, AIMIX, Komatsu...")
     model = st.text_input("Tipe/Model", placeholder="Contoh: T-200, PC200...")
-    comp = st.selectbox("Komponen Diperiksa", ["Undercarriage", "Tyre", "Hydraulic", "Engine Area"])
+    comp = st.selectbox("Komponen Diperiksa", ["Engine Area", "Undercarriage", "Tyre", "Hydraulic"])
     st.divider()
     st.warning("⚠️ Instruksi: Foto komponen dari jarak dekat tanpa menggunakan filter kamera.")
 
@@ -56,49 +58,56 @@ with st.sidebar:
 uploaded_file = st.file_uploader("Upload Foto Aktual Komponen", type=["jpg", "jpeg", "png"])
 
 if uploaded_file and brand:
-    # State management
-    if 'analyzed' not in st.session_state:
-        st.session_state.analyzed = False
-
-    # Tampilkan Foto Asli (Tanpa dihapus background-nya agar mekanik bisa lihat konteks)
+    # Tampilkan Foto Asli
     img = Image.open(uploaded_file)
     st.image(img, caption=f"Konteks Lapangan: {brand} {model}", width=500)
 
-    if st.button("🔍 Jalankan Analisis Visiual AI"):
+    # State management untuk hasil analisis
+    if 'result' not in st.session_state:
+        st.session_state.result = None
+    if 'analyzed' not in st.session_state:
+        st.session_state.analyzed = False
+
+    if st.button("🔍 Jalankan Analisis Visual AI"):
         with st.status("Memindai anomali struktural...", expanded=True) as status:
-            # Pastikan urutan bahannya sesuai dengan definisi fungsi (4 variabel)
-st.session_state.result = pure_diagnostic_engine(
-    uploaded_file.getvalue(), 
-    brand, 
-    model, 
-    comp
-)
+            # PEMPERBAIKAN INDENTASI DI SINI
+            res = pure_diagnostic_engine(
+                uploaded_file.getvalue(), 
+                brand, 
+                model, 
+                comp
+            )
+            st.session_state.result = res
             st.session_state.analyzed = True
             status.update(label="Analisis Selesai", state="complete")
 
-    # Hasil Analisis
-    if st.session_state.analyzed:
+    # Tampilkan Hasil Analisis jika sudah ada
+    if st.session_state.analyzed and st.session_state.result:
         st.divider()
         res = st.session_state.result
         
         c1, c2, c3 = st.columns(3)
-        c1.metric("Skor Integritas (Health)", f"{res['score']}%")
+        c1.metric("Skor Integritas (Health)", f"{res.get('score', 0)}%")
         
         with c2:
             st.subheader("Status Komponen")
-            if res['status'] == "Critical": st.error(res['status'])
-            elif res['status'] == "Warning": st.warning(res['status'])
-            else: st.success(res['status'])
+            status_text = res.get('status', 'Unknown')
+            if status_text == "Critical": st.error(status_text)
+            elif status_text == "Warning": st.warning(status_text)
+            else: st.success(status_text)
             
         with c3:
             st.subheader("Temuan AI")
-            st.write(res['note'])
+            st.write(res.get('note', 'Tidak ada catatan.'))
 
-        # --- KONVERSI & CALL TO ACTION ---
+        # --- KONVERSI & PDF (Sederhana untuk tes) ---
         st.divider()
         st.write("### 📄 Unduh Laporan Inspeksi Digital")
-        if st.button("Generate Laporan & Rekomendasi Part (Rp 75.000)"):
-            st.info("Sistem mengarahkan ke Gateway Pembayaran...")
-            time.sleep(2)
-            st.success("Laporan berhasil dibuat. Silakan unduh.")
-            st.download_button("📥 Download Report.pdf", data="Data Laporan Tambang", file_name=f"Inspeksi_{brand}.pdf")
+        if st.button("Generate Laporan & Rekomendasi Part"):
+            st.info("Laporan sedang disiapkan...")
+            time.sleep(1)
+            st.download_button(
+                label="📥 Download Report.pdf", 
+                data=f"Report {brand} {model} - Status: {status_text}", 
+                file_name=f"Inspeksi_{brand}.pdf"
+            )
