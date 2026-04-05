@@ -11,7 +11,7 @@ except:
     api_key = ""
     st.error("⚠️ API Key belum diset di Secrets Streamlit!")
 
-# --- 2. ENGINE DIAGNOSA MURNI (DIRECT REST API BYPASS) ---
+# --- 2. ENGINE DIAGNOSA MURNI (REST API AUTO-SNIPER) ---
 def pure_diagnostic_engine(image_bytes, brand, model_name, category):
     if not api_key:
         return {"score": 0, "status": "Error", "note": "API Key kosong. Silakan isi di Secrets."}
@@ -23,12 +23,7 @@ def pure_diagnostic_engine(image_bytes, brand, model_name, category):
         3. Berikan skor 0-100, status (Good/Warning/Critical), dan temuan teknis singkat.
         Format jawaban WAJIB JSON murni: {{"score": angka, "status": "teks", "note": "teks"}}"""
 
-        # Ubah gambar menjadi kode Base64 agar bisa ditransfer lewat internet langsung
         base64_img = base64.b64encode(image_bytes).decode('utf-8')
-
-        # Tembak langsung ke Endpoint resmi Gemini 1.5 Flash
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={api_key}"
-        
         payload = {
             "contents": [{
                 "parts": [
@@ -42,23 +37,35 @@ def pure_diagnostic_engine(image_bytes, brand, model_name, category):
                 ]
             }]
         }
-        
         headers = {"Content-Type": "application/json"}
         
-        # Eksekusi pengiriman data
-        response = requests.post(url, headers=headers, json=payload)
+        # --- LOGIKA PELURU GANDA (AUTO-FALLBACK) ---
+        # Daftar pintu server dari yang paling baru sampai yang paling lama
+        endpoints = [
+            "gemini-1.5-flash-latest",
+            "gemini-pro-vision", 
+            "gemini-1.5-pro-latest"
+        ]
         
-        # Evaluasi Hasil
-        if response.status_code == 200:
-            data = response.json()
-            raw_text = data['candidates'][0]['content']['parts'][0]['text']
+        last_error = ""
+        
+        for model in endpoints:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
+            response = requests.post(url, headers=headers, json=payload)
             
-            # Bersihkan format JSON
-            clean_res = raw_text.replace('```json', '').replace('```', '').strip()
-            return json.loads(clean_res)
-        else:
-            # Jika Google masih menolak, kita akan tahu alasannya dengan sangat persis
-            return {"score": 0, "status": "Error", "note": f"Penolakan Server: {response.text}"}
+            if response.status_code == 200:
+                # Berhasil tembus!
+                data = response.json()
+                raw_text = data['candidates'][0]['content']['parts'][0]['text']
+                clean_res = raw_text.replace('```json', '').replace('```', '').strip()
+                return json.loads(clean_res)
+            else:
+                # Simpan error terakhir dan coba pintu berikutnya
+                last_error = response.text
+                continue
+                
+        # Jika semua pintu ditutup oleh Google
+        return {"score": 0, "status": "Error", "note": f"Semua jalur ditolak. Error terakhir: {last_error}"}
             
     except Exception as e:
         return {"score": 0, "status": "Error", "note": f"System Error: {str(e)}"}
@@ -79,7 +86,6 @@ with st.sidebar:
 uploaded_file = st.file_uploader("Upload Foto Aktual Komponen", type=["jpg", "jpeg", "png"])
 
 if uploaded_file and brand:
-    # Karena kita tidak butuh PIL lagi untuk AI, kita hanya pakai st.image bawaan Streamlit
     st.image(uploaded_file, caption=f"Konteks Lapangan: {brand} {model_name}", width=500)
 
     if 'result' not in st.session_state:
