@@ -9,14 +9,38 @@ try:
     api_key = st.secrets["GOOGLE_API_KEY"]
 except:
     api_key = ""
-    st.error("⚠️ API Key belum diset di Secrets Streamlit!")
 
-# --- 2. ENGINE DIAGNOSA MURNI (REST API AUTO-SNIPER) ---
+# --- 2. ENGINE DIAGNOSA MURNI (AUTO-DISCOVERY REST API) ---
 def pure_diagnostic_engine(image_bytes, brand, model_name, category):
     if not api_key:
         return {"score": 0, "status": "Error", "note": "API Key kosong. Silakan isi di Secrets."}
 
     try:
+        # TAHAP 1: AUTO-DISCOVERY (Membaca "Menu" dari Google)
+        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+        list_res = requests.get(list_url)
+        
+        if list_res.status_code != 200:
+            return {"score": 0, "status": "Error", "note": "Gagal membaca daftar model dari server Google."}
+            
+        available_models = list_res.json().get('models', [])
+        chosen_model = None
+        
+        # Mencari model yang mendukung 'generateContent' dan cocok untuk gambar
+        for m in available_models:
+            methods = m.get('supportedGenerationMethods', [])
+            name = m.get('name', '') # Outputnya otomatis berbentuk 'models/nama-model'
+            
+            if 'generateContent' in methods:
+                # Prioritaskan model Flash atau Pro yang memiliki kemampuan Vision
+                if 'flash' in name or 'pro' in name or 'vision' in name:
+                    chosen_model = name
+                    break
+        
+        if not chosen_model:
+            return {"score": 0, "status": "Error", "note": "API Key Anda tidak memiliki akses ke model Vision/AI apapun."}
+
+        # TAHAP 2: EKSEKUSI DIAGNOSA
         prompt = f"""Anda adalah Inspektur Alat Berat Senior. Analisa foto {category} unit {brand} {model_name}. 
         1. Baca indikator panel monitor jika ada (RPM, Temp, Voltase).
         2. Cari anomali fisik (aus, retak, bocor).
@@ -39,33 +63,17 @@ def pure_diagnostic_engine(image_bytes, brand, model_name, category):
         }
         headers = {"Content-Type": "application/json"}
         
-        # --- LOGIKA PELURU GANDA (AUTO-FALLBACK) ---
-        # Daftar pintu server dari yang paling baru sampai yang paling lama
-        endpoints = [
-            "gemini-1.5-flash-latest",
-            "gemini-pro-vision", 
-            "gemini-1.5-pro-latest"
-        ]
+        # Menembak tepat ke model yang sudah dikonfirmasi aktif oleh Google
+        execute_url = f"https://generativelanguage.googleapis.com/v1beta/{chosen_model}:generateContent?key={api_key}"
+        response = requests.post(execute_url, headers=headers, json=payload)
         
-        last_error = ""
-        
-        for model in endpoints:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={api_key}"
-            response = requests.post(url, headers=headers, json=payload)
-            
-            if response.status_code == 200:
-                # Berhasil tembus!
-                data = response.json()
-                raw_text = data['candidates'][0]['content']['parts'][0]['text']
-                clean_res = raw_text.replace('```json', '').replace('```', '').strip()
-                return json.loads(clean_res)
-            else:
-                # Simpan error terakhir dan coba pintu berikutnya
-                last_error = response.text
-                continue
-                
-        # Jika semua pintu ditutup oleh Google
-        return {"score": 0, "status": "Error", "note": f"Semua jalur ditolak. Error terakhir: {last_error}"}
+        if response.status_code == 200:
+            data = response.json()
+            raw_text = data['candidates'][0]['content']['parts'][0]['text']
+            clean_res = raw_text.replace('```json', '').replace('```', '').strip()
+            return json.loads(clean_res)
+        else:
+            return {"score": 0, "status": "Error", "note": f"Eksekusi gagal pada {chosen_model}: {response.text}"}
             
     except Exception as e:
         return {"score": 0, "status": "Error", "note": f"System Error: {str(e)}"}
@@ -94,7 +102,7 @@ if uploaded_file and brand:
         st.session_state.analyzed = False
 
     if st.button("🔍 Jalankan Analisis Visual AI"):
-        with st.status("Memindai anomali via Direct API...", expanded=True) as status:
+        with st.status("Melakukan Handshake dengan Server Google...", expanded=True) as status:
             res = pure_diagnostic_engine(
                 uploaded_file.getvalue(), 
                 brand, 
