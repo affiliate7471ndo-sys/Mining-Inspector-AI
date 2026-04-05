@@ -17,7 +17,7 @@ except:
 def pure_diagnostic_engine(image_bytes, brand, model, category):
     try:
         # Konfigurasi Model Vision
-        model_ai = genai.GenerativeModel('gemini-1.5-flash')
+        model_ai = genai.GenerativeModel('gemini-1.5-flash-latest')
         
         # Prompt Engineering yang tajam
         prompt = f"""
