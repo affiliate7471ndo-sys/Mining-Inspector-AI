@@ -15,6 +15,7 @@ except:
 
 # --- 2. ENGINE DIAGNOSA MURNI ---
 # LOGIKA BARU YANG LEBIH TAHAN ERROR:
+def pure_diagnostic_engine(image_bytes, brand, model_name, category):
 try:
     # Model terbaru dan tercepat
     model_ai = genai.GenerativeModel('gemini-1.5-flash-latest')
