@@ -15,17 +15,29 @@ except:
 
 # --- 2. ENGINE DIAGNOSA MURNI (LOGIKA AI) ---
 def pure_diagnostic_engine(image_bytes, brand, model_name, category):
-    def pure_diagnostic_engine(image_bytes, brand, model_name, category):
     try:
-    # Model terbaru dan tercepat
-    model_ai = genai.GenerativeModel('gemini-1.5-flash-latest')
-except:
-    try:
-        # Nama model alternatif untuk beberapa region API
+        # Gunakan model terbaru
         model_ai = genai.GenerativeModel('gemini-1.5-flash')
-    except:
+except:
         # Cadangan terakhir jika model Flash belum tersedia
-        model_ai = genai.GenerativeModel('gemini-pro-vision')        
+        model_ai = genai.GenerativeModel('gemini-pro-vision')
+        
+        prompt = f"""Anda adalah Inspektur Alat Berat Senior. Analisa foto {category} unit {brand} {model_name}. 
+        1. Baca indikator panel monitor jika ada (RPM, Temp, Voltase).
+        2. Cari anomali fisik (aus, retak, bocor).
+        3. Berikan skor 0-100, status, dan temuan teknis singkat.
+        Format jawaban WAJIB JSON murni: {{"score": angka, "status": "teks", "note": "teks"}}"""
+        
+        img = Image.open(io.BytesIO(image_bytes))
+        response = model_ai.generate_content([prompt, img])
+        
+        # Membersihkan output AI dari karakter markdown
+        clean_res = response.text.replace('```json', '').replace('```', '').strip()
+        return json.loads(clean_res)
+        
+    except Exception as e:
+        return {"score": 0, "status": "Error", "note": f"AI Error: {str(e)}"}
+        
 # --- 3. ANTARMUKA PENGGUNA ---
 st.set_page_config(page_title="Mining Inspector AI", layout="wide")
 st.title("🚜 Mining Inspector AI")
