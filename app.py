@@ -66,7 +66,13 @@ if uploaded_file and brand:
 
     if st.button("🔍 Jalankan Analisis Visiual AI"):
         with st.status("Memindai anomali struktural...", expanded=True) as status:
-            st.session_state.result = pure_diagnostic_engine(uploaded_file.getvalue(), comp)
+            # Pastikan urutan bahannya sesuai dengan definisi fungsi (4 variabel)
+st.session_state.result = pure_diagnostic_engine(
+    uploaded_file.getvalue(), 
+    brand, 
+    model, 
+    comp
+)
             st.session_state.analyzed = True
             status.update(label="Analisis Selesai", state="complete")
 
