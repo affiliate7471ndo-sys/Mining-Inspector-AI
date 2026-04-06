@@ -35,16 +35,14 @@ def load_catalog_context():
     except:
         return "Gunakan estimasi harga pasar alat berat yang wajar."
 
-# --- 3. AUTO-COMPRESSOR (MENCEGAH SERVER TERSEDAK) ---
+# --- 3. AUTO-COMPRESSOR ---
 def compress_image(img_bytes, max_size=800):
-    """Mengecilkan resolusi foto sebelum dikirim ke AI agar super cepat"""
     img = Image.open(io.BytesIO(img_bytes))
     if img.mode != 'RGB':
         img = img.convert('RGB')
-    # Resize menjaga rasio
     img.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
     out = io.BytesIO()
-    img.save(out, format="JPEG", quality=85) # Kompresi ke JPEG ringan
+    img.save(out, format="JPEG", quality=85) 
     return out.getvalue()
 
 # --- 4. ENGINE DIAGNOSA ---
@@ -52,7 +50,14 @@ def pure_diagnostic_engine(image_bytes_list, brand, model_name, serial_number, c
     if not api_key: return {"score": 0, "status": "Error", "note": "API Key Hilang"}
     
     try:
-        model_name_ai = "gemini-1.5-flash" 
+        # AUTO-DISCOVERY: Mencari model yang tersedia secara dinamis (Anti Error 404)
+        list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
+        list_res = requests.get(list_url)
+        available_models = list_res.json().get('models', [])
+        chosen_model = next((m['name'] for m in available_models if 'generateContent' in m.get('supportedGenerationMethods', []) and ('flash' in m['name'] or 'pro' in m['name'] or 'vision' in m['name'])), None)
+
+        if not chosen_model:
+            return {"score": 0, "status": "Error", "note": "API Key Anda tidak memiliki akses model Vision."}
         
         prompt = f"""Anda adalah Inspektur Senior AZARINDO. Analisa {len(image_bytes_list)} foto unit {brand} {model_name} (S/N: {serial_number}). 
         WAJIB berikan hasil dalam format JSON murni:
@@ -66,7 +71,6 @@ def pure_diagnostic_engine(image_bytes_list, brand, model_name, serial_number, c
 
         payload = {"contents": [{"parts": [{"text": prompt}]}]}
         
-        # MENGOMPRES SEMUA GAMBAR SEBELUM DIKIRIM
         for img_raw in image_bytes_list:
             img_compressed = compress_image(img_raw)
             payload["contents"][0]["parts"].append({
@@ -76,24 +80,21 @@ def pure_diagnostic_engine(image_bytes_list, brand, model_name, serial_number, c
                 }
             })
 
-        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name_ai}:generateContent?key={api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/{chosen_model}:generateContent?key={api_key}"
         res = requests.post(url, json=payload, headers={"Content-Type": "application/json"})
         
         if res.status_code == 200:
             text_out = res.json()['candidates'][0]['content']['parts'][0]['text']
-            # Filter JSON agar aman dari basa-basi AI
             json_match = re.search(r'\{.*\}', text_out.strip().replace('\n', ''), re.DOTALL)
             try:
                 if json_match:
                     return json.loads(json_match.group())
                 else:
-                    # Alternatif jika regex gagal
                     clean_text = text_out.replace('```json', '').replace('```', '').strip()
                     return json.loads(clean_text)
             except Exception as e:
                  return {"score": 0, "status": "Error", "note": f"Format JSON rusak: {str(e)}"}
         else:
-            # Menampilkan error asli dari Google jika gagal
             return {"score": 0, "status": "Error", "note": f"Server Error {res.status_code}: {res.text[:100]}..."}
             
     except Exception as e:
@@ -128,14 +129,22 @@ if files and sn:
         st.divider()
         c1, c2, c3 = st.columns(3)
         c1.metric("Integritas Unit", f"{res.get('score', 0)}%")
+        
+        # PERBAIKAN UI GLITCH DELTAGENERATOR
         with c2: 
             st.subheader("Status")
-            st.error(res.get('status')) if res.get('status') in ["Critical", "Error"] else st.success(res.get('status'))
+            status_txt = res.get('status', 'Error')
+            if status_txt in ["Critical", "Error"]:
+                st.error(status_txt)
+            elif status_txt == "Warning":
+                st.warning(status_txt)
+            else:
+                st.success(status_txt)
+                
         with c3: 
             st.subheader("Kesimpulan Teknis")
             st.write(res.get('note'))
 
-        # Hanya tampilkan tombol cetak jika tidak error
         if res.get('status') != "Error":
             if st.button("📄 CETAK PDF & SIMPAN DATABASE"):
                 with st.spinner("Menyusun Laporan..."):
