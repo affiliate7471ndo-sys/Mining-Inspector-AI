@@ -8,9 +8,11 @@ import gspread
 import pandas as pd
 import tempfile
 import os
+import io
 from datetime import datetime
 from fpdf import FPDF
 from google.oauth2.service_account import Credentials
+from PIL import Image
 
 # --- 1. KONFIGURASI API & DATABASE ---
 try:
@@ -119,7 +121,7 @@ def save_to_database(data_row):
 # --- 5. ANTARMUKA PENGGUNA (UI) ---
 st.set_page_config(page_title="Mining Inspector AI", layout="wide")
 st.title("🚜 Mining Inspector AI (Heavy-Duty Inspection)")
-st.subheader("Sistem Analisis Multi-Visual (Maks 10 Foto) & Database AZARINDO")
+st.subheader("Sistem Analisis Multi-Visual & Database AZARINDO")
 
 if not db_connected:
     st.info("ℹ️ Mode Offline: Database Google Sheets belum terhubung.")
@@ -228,7 +230,7 @@ if uploaded_files and brand and serial_number:
                 
                 if parts:
                     pdf.set_font("Arial", "B", 12)
-                    pdf.cell(0, 10, txt="  REKOMENDASI SUKU CADANG (MASTER KATALOG)", ln=True)
+                    pdf.cell(0, 10, txt="  REKOMENDASI SUKU CADANG", ln=True)
                     
                     pdf.set_font("Arial", "B", 10)
                     pdf.set_fill_color(41, 128, 185)
@@ -244,19 +246,21 @@ if uploaded_files and brand and serial_number:
                         pdf.cell(130, 10, part_name, border=1)
                         pdf.cell(60, 10, est_price, border=1, ln=True)
                 
-                # --- PDF HALAMAN LANJUTAN: AUTO-PAGINATION FOTO ---
+                # --- PDF HALAMAN LANJUTAN: AUTO-PAGINATION FOTO DENGAN SMART BORDER ---
                 pdf.add_page()
                 pdf.set_font("Arial", "B", 14)
                 pdf.set_text_color(41, 128, 185)
                 pdf.cell(0, 10, txt="LAMPIRAN VISUAL INSPEKSI", ln=True, align="L")
                 pdf.set_draw_color(200, 200, 200)
                 pdf.line(10, 20, 200, 20)
-                pdf.ln(5)
-
+                
                 x_start = 10
-                y_start = 30
+                y_start = 25
                 x_offset = 95
-                y_offset = 110 # Jarak antar baris foto dilebarkan
+                y_offset = 110 
+                
+                box_w = 85
+                box_h = 100
                 
                 for idx, file in enumerate(files_to_process):
                     if idx > 0 and idx % 4 == 0:
@@ -270,30 +274,41 @@ if uploaded_files and brand and serial_number:
                     col = idx % 2
                     row = (idx % 4) // 2
                     
-                    x_pos = x_start + (col * x_offset)
-                    y_pos = y_start + (row * y_offset)
+                    x_box = x_start + (col * x_offset)
+                    y_box = y_start + (row * y_offset)
+                    
+                    # Logika Aspect Ratio Pintar menggunakan PIL
+                    img_bytes = file.getvalue()
+                    img_pil = Image.open(io.BytesIO(img_bytes))
+                    img_w, img_h = img_pil.size
+                    ratio = img_w / img_h
+                    
+                    if ratio > (box_w / box_h): # Foto Landscape / Memanjang ke samping
+                        print_w = box_w
+                        print_h = box_w / ratio
+                    else: # Foto Portrait / Memanjang ke bawah
+                        print_h = box_h
+                        print_w = box_h * ratio
+                    
+                    # Sentralisasi posisi gambar di dalam bingkai bayangan 85x100mm
+                    x_draw = x_box + (box_w - print_w) / 2
+                    y_draw = y_box + (box_h - print_h) / 2
                     
                     with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
-                        tmp_file.write(file.getvalue())
+                        tmp_file.write(img_bytes)
                         tmp_path = tmp_file.name
                     
                     try:
-                        pdf.image(tmp_path, x=x_pos, y=y_pos, w=85) # Lebar 85 agar muat aman di kertas
+                        # Print dengan ukuran akurat yang sudah dimampatkan
+                        pdf.image(tmp_path, x=x_draw, y=y_draw, w=print_w, h=print_h)
                     except:
                         pass 
                     
                     os.remove(tmp_path)
                 
                 # --- FIX DIGITAL STAMP OVERLAP ---
-                final_row = ((len(files_to_process) - 1) % 4) // 2
-                
-                # Jika foto terakhir jatuh pada baris bawah (row == 1), 
-                # FPDF akan memecah halaman khusus untuk stamp agar tidak tertimpa foto portrait panjang.
-                if final_row == 1:
-                    pdf.add_page()
-                
-                # Kunci posisi di dasar halaman (absolute y-axis dari bawah)
-                pdf.set_y(-35) 
+                # Mengunci posisi stamp tepat 40mm dari dasar kertas, TIDAK AKAN PERNAH TABRAKAN!
+                pdf.set_y(-40) 
                 pdf.set_draw_color(200, 200, 200)
                 pdf.line(10, pdf.get_y(), 200, pdf.get_y())
                 pdf.ln(5)
