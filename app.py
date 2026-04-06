@@ -50,7 +50,6 @@ def pure_diagnostic_engine(image_bytes_list, brand, model_name, serial_number, c
     if not api_key: return {"score": 0, "status": "Error", "note": "API Key Hilang"}
     
     try:
-        # AUTO-DISCOVERY: Mencari model yang tersedia secara dinamis (Anti Error 404)
         list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
         list_res = requests.get(list_url)
         available_models = list_res.json().get('models', [])
@@ -130,7 +129,6 @@ if files and sn:
         c1, c2, c3 = st.columns(3)
         c1.metric("Integritas Unit", f"{res.get('score', 0)}%")
         
-        # PERBAIKAN UI GLITCH DELTAGENERATOR
         with c2: 
             st.subheader("Status")
             status_txt = res.get('status', 'Error')
@@ -158,48 +156,90 @@ if files and sn:
                             st.success("✅ Terdaftar di Database")
                         except: st.warning("⚠️ Gagal ke Database")
 
+                    # --- PEMBUATAN PDF (MENGEMBALIKAN DESAIN ENTERPRISE) ---
                     pdf = FPDF()
                     pdf.add_page()
                     try: pdf.image('logo.png', 10, 8, 30)
                     except: pass
                     
-                    pdf.set_font("Arial", "B", 16)
-                    pdf.set_text_color(41, 128, 185)
-                    pdf.cell(0, 10, "INSPECTION REPORT", ln=True, align="R")
-                    pdf.ln(20)
+                    # Header
+                    pdf.set_font("Arial", "B", 18)
+                    pdf.set_text_color(41, 128, 185) 
+                    pdf.cell(0, 10, txt="GENERAL INSPECTION REPORT", ln=True, align="R")
                     
-                    pdf.set_fill_color(240, 240, 240)
+                    pdf.set_font("Arial", "I", 10)
+                    pdf.set_text_color(128, 128, 128) 
+                    pdf.cell(0, 5, txt="AZARINDO Heavy Equipment Ecosystem", ln=True, align="R")
+                    pdf.cell(0, 5, txt=f"Generated: {curr_time}", ln=True, align="R")
+                    
+                    pdf.set_draw_color(41, 128, 185)
+                    pdf.set_line_width(0.5)
+                    pdf.line(10, 35, 200, 35)
+                    pdf.ln(15)
+                    
+                    # Kotak Data Unit
+                    pdf.set_text_color(0, 0, 0)
+                    pdf.set_fill_color(240, 240, 240) 
                     pdf.set_font("Arial", "B", 12)
-                    pdf.set_text_color(0)
-                    pdf.cell(0, 10, txt="  DATA UNIT", border=1, ln=True, fill=True)
-                    pdf.set_font("Arial", "", 11)
-                    pdf.cell(0, 8, f"  Unit: {brand.upper()} {model.upper()} | S/N: {sn.upper()}", border="LR", ln=True)
-                    pdf.cell(0, 8, f"  Kategori: {cat} | Skor: {res.get('score')}%", border="LRB", ln=True)
-                    pdf.ln(5)
+                    pdf.cell(0, 10, txt="  DATA UNIT LOKASI", border=1, ln=True, fill=True)
                     
-                    pdf.set_font("Arial", "B", 11)
-                    pdf.cell(0, 8, "KESIMPULAN TEKNIS:", ln=True)
-                    pdf.set_font("Arial", "", 10)
-                    pdf.multi_cell(0, 6, str(res.get('note', '')).encode('latin-1', 'replace').decode('latin-1'))
-                    pdf.ln(5)
-
+                    pdf.set_font("Arial", "", 11)
+                    pdf.cell(0, 8, txt=f"  Merek/Model  : {brand.upper()} {model.upper()}", border="LR", ln=True)
+                    pdf.cell(0, 8, txt=f"  Serial Number: {sn.upper()}", border="LR", ln=True)
+                    pdf.cell(0, 8, txt=f"  Kategori     : {cat}", border="LR", ln=True)
+                    pdf.cell(0, 8, txt=f"  Health Score : {res.get('score')}%  |  Status: {res.get('status')}", border="LRB", ln=True)
+                    pdf.ln(8)
+                    
+                    # Temuan Teknis
+                    pdf.set_font("Arial", "B", 12)
+                    pdf.cell(0, 10, txt="  KESIMPULAN INSPEKSI MENYELURUH", ln=True)
+                    pdf.set_font("Arial", "", 11)
+                    safe_note = str(res.get('note', '')).encode('latin-1', 'replace').decode('latin-1')
+                    pdf.multi_cell(0, 7, txt=safe_note)
+                    pdf.ln(8)
+                    
+                    # TABEL BIRU SUKU CADANG (Dikembalikan)
                     parts = res.get('parts_recommendation', [])
                     if parts:
-                        pdf.set_font("Arial", "B", 11)
-                        pdf.cell(0, 8, "REKOMENDASI SUKU CADANG:", ln=True)
-                        pdf.set_font("Arial", "", 9)
+                        pdf.set_font("Arial", "B", 12)
+                        pdf.cell(0, 10, txt="  REKOMENDASI SUKU CADANG (MASTER KATALOG)", ln=True)
+                        
+                        pdf.set_font("Arial", "B", 10)
+                        pdf.set_fill_color(41, 128, 185)
+                        pdf.set_text_color(255, 255, 255)
+                        pdf.cell(130, 10, "Deskripsi Part & Part Number", border=1, fill=True)
+                        pdf.cell(60, 10, "Estimasi Harga (IDR)", border=1, ln=True, fill=True)
+                        
+                        pdf.set_font("Arial", "", 10)
+                        pdf.set_text_color(0, 0, 0)
                         for p in parts:
-                            pdf.cell(0, 6, f"- {p.get('part_name')} ({p.get('est_price')})".encode('latin-1', 'replace').decode('latin-1'), ln=True)
+                            part_name = str(p.get('part_name', 'Unknown')).encode('latin-1', 'replace').decode('latin-1')
+                            est_price = str(p.get('est_price', 'N/A')).encode('latin-1', 'replace').decode('latin-1')
+                            pdf.cell(130, 10, part_name, border=1)
+                            pdf.cell(60, 10, est_price, border=1, ln=True)
                     
+                    # --- HALAMAN LAMPIRAN FOTO ---
                     pdf.add_page()
                     pdf.set_font("Arial", "B", 14)
-                    pdf.cell(0, 10, "LAMPIRAN VISUAL", ln=True)
+                    pdf.set_text_color(41, 128, 185)
+                    pdf.cell(0, 10, txt="LAMPIRAN VISUAL INSPEKSI", ln=True, align="L")
+                    pdf.set_draw_color(200, 200, 200)
+                    pdf.line(10, 20, 200, 20)
+                    pdf.ln(5)
                     
                     x_start, y_start = 15, 30
                     box_w, box_h = 75, 90
                     
                     for idx, f in enumerate(files[:10]):
-                        if idx > 0 and idx % 4 == 0: pdf.add_page(); y_start = 30
+                        if idx > 0 and idx % 4 == 0: 
+                            pdf.add_page()
+                            pdf.set_font("Arial", "B", 14)
+                            pdf.set_text_color(41, 128, 185)
+                            pdf.cell(0, 10, txt="LAMPIRAN VISUAL INSPEKSI (Lanjutan)", ln=True, align="L")
+                            pdf.set_draw_color(200, 200, 200)
+                            pdf.line(10, 20, 200, 20)
+                            y_start = 30
+                            
                         col, row = idx % 2, (idx % 4) // 2
                         x_box, y_box = x_start + (col * 90), y_start + (row * 100)
                         
@@ -210,14 +250,24 @@ if files and sn:
                         
                         with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp:
                             tmp.write(f.getvalue()); tmp_path = tmp.name
-                        pdf.image(tmp_path, x=x_box + (box_w-p_w)/2, y=y_box + (box_h-p_h)/2, w=p_w, h=p_h)
+                        try:
+                            pdf.image(tmp_path, x=x_box + (box_w-p_w)/2, y=y_box + (box_h-p_h)/2, w=p_w, h=p_h)
+                        except: pass
                         os.remove(tmp_path)
 
+                    # DIGITAL STAMP (Dikembalikan ke format rapi 3 Baris di Pojok Kiri Bawah)
                     pdf.set_auto_page_break(False)
-                    pdf.set_y(-25)
-                    pdf.set_font("Arial", "I", 7)
-                    pdf.set_text_color(150)
+                    pdf.set_y(-30)
+                    pdf.set_draw_color(200, 200, 200)
                     pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-                    pdf.cell(0, 5, f"Verified by AZARINDO AI - DOC ID: TA-{doc_id}", align="C")
+                    pdf.ln(3)
                     
-                    st.download_button("📥 DOWNLOAD PDF", pdf.output(dest='S').encode('latin-1'), f"Report_{sn}.pdf")
+                    pdf.set_font("Arial", "B", 8)
+                    pdf.set_text_color(0, 0, 0)
+                    pdf.cell(0, 4, txt="DIGITAL AUTHORIZATION STAMP", ln=True)
+                    pdf.set_font("Arial", "", 8)
+                    pdf.cell(0, 4, txt=f"Document ID : TA-{doc_id}-{int(time.time())}", ln=True)
+                    pdf.cell(0, 4, txt="Verified By : System VORTEX / Mining Inspector Engine", ln=True)
+                    pdf.cell(0, 4, txt="Status      : SYSTEM GENERATED - NO SIGNATURE REQUIRED", ln=True)
+                    
+                    st.download_button("📥 DOWNLOAD PDF FINAL", pdf.output(dest='S').encode('latin-1'), f"Report_{sn}.pdf")
