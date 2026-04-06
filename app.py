@@ -57,10 +57,10 @@ def pure_diagnostic_engine(image_bytes_list, brand, model_name, serial_number, c
         prompt = f"""Anda adalah Inspektur Alat Berat Senior AZARINDO. 
         Analisa KUMPULAN FOTO (Total: {len(image_bytes_list)} foto) dari unit {brand} {model_name} (S/N: {serial_number}). 
         Kategori Inspeksi: {category}.
-        1. Lakukan inspeksi menyeluruh dari SEMUA foto. Hubungkan temuan dari foto satu dengan foto lainnya (misal: monitor menunjukkan RPM 0, foto lain menunjukkan kebocoran hose).
+        1. Lakukan inspeksi menyeluruh dari SEMUA foto. Hubungkan temuan dari foto satu dengan foto lainnya.
         2. Gabungkan temuan menjadi satu kesimpulan teknis yang solid.
         3. Berikan skor kesehatan keseluruhan (0-100) dan status (Good/Warning/Critical).
-        4. Sebutkan daftar suku cadang yang perlu diganti dari SELURUH anomali di 10 foto tersebut.
+        4. Sebutkan daftar suku cadang yang perlu diganti dari SELURUH anomali di foto tersebut.
         
         {katalog_data}
         
@@ -132,15 +132,13 @@ with st.sidebar:
     comp = st.selectbox("Kategori Inspeksi", ["General Inspection (Multi-Part)", "Engine Area", "Undercarriage", "Hydraulic System"])
     st.divider()
 
-# UPDATE: Memungkinkan upload hingga 10 foto
 uploaded_files = st.file_uploader("Upload Foto Lapangan (Maks 10 Foto)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
 if uploaded_files and brand and serial_number:
-    files_to_process = uploaded_files[:10] # Kunci maksimal 10 foto
+    files_to_process = uploaded_files[:10] 
     
     st.write(f"**📸 Konteks Lapangan: {brand.upper()} {model_name.upper()} | S/N: {serial_number.upper()} ({len(files_to_process)} Titik Inspeksi)**")
     
-    # Menampilkan UI Grid Foto dengan cerdas (5 kolom per baris agar tidak bertumpuk)
     for i in range(0, len(files_to_process), 5):
         cols = st.columns(5)
         for j, f in enumerate(files_to_process[i:i+5]):
@@ -258,10 +256,9 @@ if uploaded_files and brand and serial_number:
                 x_start = 10
                 y_start = 30
                 x_offset = 95
-                y_offset = 100
+                y_offset = 110 # Jarak antar baris foto dilebarkan
                 
                 for idx, file in enumerate(files_to_process):
-                    # Jika sudah mencapai 4 foto di satu halaman, buat halaman baru
                     if idx > 0 and idx % 4 == 0:
                         pdf.add_page()
                         pdf.set_font("Arial", "B", 14)
@@ -269,7 +266,6 @@ if uploaded_files and brand and serial_number:
                         pdf.cell(0, 10, txt="LAMPIRAN VISUAL INSPEKSI (Lanjutan)", ln=True, align="L")
                         pdf.set_draw_color(200, 200, 200)
                         pdf.line(10, 20, 200, 20)
-                        y_start = 30 # Reset posisi Y untuk halaman baru
 
                     col = idx % 2
                     row = (idx % 4) // 2
@@ -282,22 +278,22 @@ if uploaded_files and brand and serial_number:
                         tmp_path = tmp_file.name
                     
                     try:
-                        pdf.image(tmp_path, x=x_pos, y=y_pos, w=90)
+                        pdf.image(tmp_path, x=x_pos, y=y_pos, w=85) # Lebar 85 agar muat aman di kertas
                     except:
                         pass 
                     
                     os.remove(tmp_path)
                 
-                # Menentukan posisi Y untuk Digital Stamp di halaman terakhir foto
+                # --- FIX DIGITAL STAMP OVERLAP ---
                 final_row = ((len(files_to_process) - 1) % 4) // 2
-                final_y_pos = y_start + (final_row * y_offset) + 85 # 85 adalah estimasi tinggi gambar
                 
-                # Jika stamp tidak muat di halaman bawah, paksa buat halaman baru
-                if final_y_pos > 250:
+                # Jika foto terakhir jatuh pada baris bawah (row == 1), 
+                # FPDF akan memecah halaman khusus untuk stamp agar tidak tertimpa foto portrait panjang.
+                if final_row == 1:
                     pdf.add_page()
-                    final_y_pos = 20
-
-                pdf.set_y(final_y_pos + 10)
+                
+                # Kunci posisi di dasar halaman (absolute y-axis dari bawah)
+                pdf.set_y(-35) 
                 pdf.set_draw_color(200, 200, 200)
                 pdf.line(10, pdf.get_y(), 200, pdf.get_y())
                 pdf.ln(5)
