@@ -5,6 +5,9 @@ import json
 import time
 import uuid
 import gspread
+import pandas as pd
+import tempfile
+import os
 from datetime import datetime
 from fpdf import FPDF
 from google.oauth2.service_account import Credentials
@@ -12,8 +15,6 @@ from google.oauth2.service_account import Credentials
 # --- 1. KONFIGURASI API & DATABASE ---
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
-    
-    # Kredensial Google Sheets (Opsional: Tetap jalan walau Sheets belum disetup)
     try:
         sheet_id = st.secrets["GOOGLE_SHEETS_ID"]
         gcp_info = json.loads(st.secrets["GCP_SERVICE_ACCOUNT"])
@@ -27,8 +28,18 @@ except:
     api_key = ""
     db_connected = False
 
-# --- 2. ENGINE DIAGNOSA MURNI (REST API) ---
-def pure_diagnostic_engine(image_bytes, brand, model_name, serial_number, category):
+# --- 2. ENGINE PEMBACA KATALOG (RAG SYSTEM) ---
+def load_catalog_context():
+    try:
+        df = pd.read_csv('katalog.csv')
+        catalog_text = "REFERENSI KATALOG HARGA AZARINDO:\n"
+        catalog_text += df.to_string(index=False)
+        return catalog_text
+    except Exception as e:
+        return "KATALOG TIDAK DITEMUKAN. Gunakan estimasi wajar."
+
+# --- 3. ENGINE DIAGNOSA MULTI-VISUAL (UP TO 10 IMAGES) ---
+def pure_diagnostic_engine(image_bytes_list, brand, model_name, serial_number, category):
     if not api_key:
         return {"score": 0, "status": "Error", "note": "API Key kosong."}
 
@@ -41,26 +52,47 @@ def pure_diagnostic_engine(image_bytes, brand, model_name, serial_number, catego
         if not chosen_model:
             return {"score": 0, "status": "Error", "note": "Akses model Vision ditolak."}
 
-        # Prompt AI sekarang mengunci Serial Number
-        prompt = f"""Anda adalah Inspektur Alat Berat Senior. Analisa foto {category} unit {brand} {model_name} dengan Serial Number: {serial_number}. 
-        1. Baca indikator panel monitor jika ada.
-        2. Cari anomali fisik.
-        3. Berikan skor 0-100, status (Good/Warning/Critical), dan temuan teknis.
-        4. WAJIB: Sebutkan daftar suku cadang yang perlu diganti dan estimasi harga dalam Rupiah (IDR).
+        katalog_data = load_catalog_context()
+
+        prompt = f"""Anda adalah Inspektur Alat Berat Senior AZARINDO. 
+        Analisa KUMPULAN FOTO (Total: {len(image_bytes_list)} foto) dari unit {brand} {model_name} (S/N: {serial_number}). 
+        Kategori Inspeksi: {category}.
+        1. Lakukan inspeksi menyeluruh dari SEMUA foto. Hubungkan temuan dari foto satu dengan foto lainnya (misal: monitor menunjukkan RPM 0, foto lain menunjukkan kebocoran hose).
+        2. Gabungkan temuan menjadi satu kesimpulan teknis yang solid.
+        3. Berikan skor kesehatan keseluruhan (0-100) dan status (Good/Warning/Critical).
+        4. Sebutkan daftar suku cadang yang perlu diganti dari SELURUH anomali di 10 foto tersebut.
+        
+        {katalog_data}
+        
+        WAJIB cocokkan suku cadang dengan KATALOG di atas jika tersedia.
         Format jawaban WAJIB JSON murni: 
         {{
             "score": angka, 
             "status": "teks", 
-            "note": "teks", 
+            "note": "Kesimpulan komprehensif...", 
             "parts_recommendation": [
-                {{"part_name": "Nama Suku Cadang", "est_price": "Harga Rupiah"}}
+                {{"part_name": "Nama Part (Part Number)", "est_price": "Harga Rupiah"}}
             ]
         }}"""
 
-        base64_img = base64.b64encode(image_bytes).decode('utf-8')
-        payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_img}}]}]}
-        headers = {"Content-Type": "application/json"}
+        payload = {
+            "contents": [{
+                "parts": [
+                    {"text": prompt}
+                ]
+            }]
+        }
         
+        for img_bytes in image_bytes_list:
+            base64_img = base64.b64encode(img_bytes).decode('utf-8')
+            payload["contents"][0]["parts"].append({
+                "inline_data": {
+                    "mime_type": "image/jpeg",
+                    "data": base64_img
+                }
+            })
+
+        headers = {"Content-Type": "application/json"}
         execute_url = f"https://generativelanguage.googleapis.com/v1beta/{chosen_model}:generateContent?key={api_key}"
         response = requests.post(execute_url, headers=headers, json=payload)
         
@@ -74,7 +106,7 @@ def pure_diagnostic_engine(image_bytes, brand, model_name, serial_number, catego
     except Exception as e:
         return {"score": 0, "status": "Error", "note": f"System Error: {str(e)}"}
 
-# --- 3. FUNGSI DATABASE ---
+# --- 4. FUNGSI DATABASE ---
 def save_to_database(data_row):
     if not db_connected: return False
     try:
@@ -84,34 +116,44 @@ def save_to_database(data_row):
     except:
         return False
 
-# --- 4. ANTARMUKA PENGGUNA (UI) ---
+# --- 5. ANTARMUKA PENGGUNA (UI) ---
 st.set_page_config(page_title="Mining Inspector AI", layout="wide")
-st.title("🚜 Mining Inspector AI")
-st.subheader("Sistem Analisis Visual & Database Inspeksi")
+st.title("🚜 Mining Inspector AI (Heavy-Duty Inspection)")
+st.subheader("Sistem Analisis Multi-Visual (Maks 10 Foto) & Database AZARINDO")
 
 if not db_connected:
-    st.info("ℹ️ Mode Offline: Database Google Sheets belum terhubung. PDF tetap bisa dicetak.")
+    st.info("ℹ️ Mode Offline: Database Google Sheets belum terhubung.")
 
 with st.sidebar:
     st.header("📋 Parameter Unit")
     brand = st.text_input("Merek Unit", placeholder="Contoh: Tatsuo, AIMIX...")
     model_name = st.text_input("Tipe/Model", placeholder="Contoh: JP80-9")
-    serial_number = st.text_input("Serial Number (S/N)", placeholder="Contoh: TS-809-991204")
-    comp = st.selectbox("Komponen Diperiksa", ["Engine Area", "Undercarriage", "Tyre", "Hydraulic"])
+    serial_number = st.text_input("Serial Number (S/N)", placeholder="Contoh: 2401X0059")
+    comp = st.selectbox("Kategori Inspeksi", ["General Inspection (Multi-Part)", "Engine Area", "Undercarriage", "Hydraulic System"])
     st.divider()
 
-uploaded_file = st.file_uploader("Upload Foto Aktual Komponen", type=["jpg", "jpeg", "png"])
+# UPDATE: Memungkinkan upload hingga 10 foto
+uploaded_files = st.file_uploader("Upload Foto Lapangan (Maks 10 Foto)", type=["jpg", "jpeg", "png"], accept_multiple_files=True)
 
-# Syarat tombol jalan: Brand, Model, dan S/N harus diisi
-if uploaded_file and brand and serial_number:
-    st.image(uploaded_file, caption=f"Konteks Lapangan: {brand.upper()} {model_name.upper()} | S/N: {serial_number.upper()}", width=500)
+if uploaded_files and brand and serial_number:
+    files_to_process = uploaded_files[:10] # Kunci maksimal 10 foto
+    
+    st.write(f"**📸 Konteks Lapangan: {brand.upper()} {model_name.upper()} | S/N: {serial_number.upper()} ({len(files_to_process)} Titik Inspeksi)**")
+    
+    # Menampilkan UI Grid Foto dengan cerdas (5 kolom per baris agar tidak bertumpuk)
+    for i in range(0, len(files_to_process), 5):
+        cols = st.columns(5)
+        for j, f in enumerate(files_to_process[i:i+5]):
+            cols[j].image(f, use_container_width=True)
 
     if 'result' not in st.session_state: st.session_state.result = None
     if 'analyzed' not in st.session_state: st.session_state.analyzed = False
 
-    if st.button("🔍 Jalankan Analisis Visual AI"):
-        with st.status("Menghubungkan ke Server Pusat & Memindai...", expanded=True) as status:
-            res = pure_diagnostic_engine(uploaded_file.getvalue(), brand, model_name, serial_number, comp)
+    if st.button("🔍 Jalankan AI Heavy-Duty Scan"):
+        with st.status(f"Menganalisa {len(files_to_process)} foto secara paralel...", expanded=True) as status:
+            image_bytes_list = [f.getvalue() for f in files_to_process]
+            res = pure_diagnostic_engine(image_bytes_list, brand, model_name, serial_number, comp)
+            
             st.session_state.result = res
             st.session_state.analyzed = True
             status.update(label="Analisis Selesai", state="complete")
@@ -124,57 +166,38 @@ if uploaded_file and brand and serial_number:
         col1.metric("Skor Integritas (Health)", f"{res.get('score', 0)}%")
         
         with col2:
-            st.subheader("Status Komponen")
+            st.subheader("Status Unit")
             status_text = res.get('status', 'Unknown')
             if status_text == "Critical": st.error(status_text)
             elif status_text == "Warning": st.warning(status_text)
             else: st.success(status_text)
             
         with col3:
-            st.subheader("Temuan Teknis AI")
+            st.subheader("Kesimpulan Inspeksi Menyeluruh")
             st.write(res.get('note', 'Tidak ada catatan.'))
 
         parts = res.get('parts_recommendation', [])
         
-        # --- 5. GENERATOR PDF & TRIGGER DATABASE ---
         st.divider()
-        st.write("### 📄 Eksekusi Laporan & Database")
+        st.write("### 📄 Eksekusi Laporan General Inspection & Database")
         
-        if st.button("Simpan Data & Cetak Dokumen Resmi"):
-            with st.spinner("Memproses Dokumen & Sinkronisasi Database..."):
+        if st.button("Simpan Data & Cetak Laporan Lengkap (PDF)"):
+            with st.spinner("Menyusun Dokumen PDF Multi-Halaman..."):
                 doc_id = str(uuid.uuid4()).split('-')[0].upper()
                 current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 
-                # Eksekusi Database
                 if db_connected:
-                    # Susunan kolom disesuaikan dengan header Excel
-                    data_to_save = [
-                        current_time, 
-                        f"TA-{doc_id}", 
-                        brand.upper(), 
-                        model_name.upper(), 
-                        serial_number.upper(), 
-                        comp, 
-                        f"{res.get('score')}%", 
-                        status_text, 
-                        "Cek PDF untuk Detail Harga"
-                    ]
-                    is_saved = save_to_database(data_to_save)
-                    if is_saved:
-                        st.success("✅ Log tersimpan di Master Database AZARINDO.")
-                    else:
-                        st.warning("⚠️ Gagal menyimpan ke Database, tapi PDF tetap dibuat.")
-
-                # Eksekusi PDF (Desain Mewah)
+                    data_to_save = [current_time, f"TA-{doc_id}", brand.upper(), model_name.upper(), serial_number.upper(), comp, f"{res.get('score')}%", status_text, f"{len(files_to_process)} Foto Terlampir"]
+                    save_to_database(data_to_save)
+                
                 pdf = FPDF()
                 pdf.add_page()
-                
                 try: pdf.image('logo.png', 10, 8, 30) 
                 except: pass 
                 
                 pdf.set_font("Arial", "B", 18)
                 pdf.set_text_color(41, 128, 185) 
-                pdf.cell(0, 10, txt="OFFICIAL INSPECTION REPORT", ln=True, align="R")
+                pdf.cell(0, 10, txt="GENERAL INSPECTION REPORT", ln=True, align="R")
                 
                 pdf.set_font("Arial", "I", 10)
                 pdf.set_text_color(128, 128, 128) 
@@ -194,12 +217,12 @@ if uploaded_file and brand and serial_number:
                 pdf.set_font("Arial", "", 11)
                 pdf.cell(0, 8, txt=f"  Merek/Model  : {brand.upper()} {model_name.upper()}", border="LR", ln=True)
                 pdf.cell(0, 8, txt=f"  Serial Number: {serial_number.upper()}", border="LR", ln=True)
-                pdf.cell(0, 8, txt=f"  Komponen     : {comp}", border="LR", ln=True)
+                pdf.cell(0, 8, txt=f"  Kategori     : {comp} ({len(files_to_process)} Titik Inspeksi)", border="LR", ln=True)
                 pdf.cell(0, 8, txt=f"  Health Score : {res.get('score', 0)}%  |  Status: {status_text}", border="LRB", ln=True)
                 pdf.ln(8)
                 
                 pdf.set_font("Arial", "B", 12)
-                pdf.cell(0, 10, txt="  TEMUAN TEKNIS LAPANGAN", ln=True)
+                pdf.cell(0, 10, txt="  KESIMPULAN INSPEKSI MENYELURUH", ln=True)
                 pdf.set_font("Arial", "", 11)
                 safe_note = str(res.get('note', 'Tidak ada catatan.')).encode('latin-1', 'replace').decode('latin-1')
                 pdf.multi_cell(0, 7, txt=safe_note)
@@ -207,12 +230,12 @@ if uploaded_file and brand and serial_number:
                 
                 if parts:
                     pdf.set_font("Arial", "B", 12)
-                    pdf.cell(0, 10, txt="  REKOMENDASI SUKU CADANG & ESTIMASI BIAYA", ln=True)
+                    pdf.cell(0, 10, txt="  REKOMENDASI SUKU CADANG (MASTER KATALOG)", ln=True)
                     
                     pdf.set_font("Arial", "B", 10)
                     pdf.set_fill_color(41, 128, 185)
                     pdf.set_text_color(255, 255, 255)
-                    pdf.cell(130, 10, "Deskripsi Part", border=1, fill=True)
+                    pdf.cell(130, 10, "Deskripsi Part & Part Number", border=1, fill=True)
                     pdf.cell(60, 10, "Estimasi Harga (IDR)", border=1, ln=True, fill=True)
                     
                     pdf.set_font("Arial", "", 10)
@@ -222,13 +245,59 @@ if uploaded_file and brand and serial_number:
                         est_price = str(p.get('est_price', 'N/A')).encode('latin-1', 'replace').decode('latin-1')
                         pdf.cell(130, 10, part_name, border=1)
                         pdf.cell(60, 10, est_price, border=1, ln=True)
-                    
-                    pdf.ln(5)
-                    pdf.set_font("Arial", "I", 9)
-                    pdf.set_text_color(128, 128, 128)
-                    pdf.multi_cell(0, 5, txt="*Harga adalah estimasi sistem AI. Hubungi dealer untuk penawaran final.")
                 
-                pdf.ln(15)
+                # --- PDF HALAMAN LANJUTAN: AUTO-PAGINATION FOTO ---
+                pdf.add_page()
+                pdf.set_font("Arial", "B", 14)
+                pdf.set_text_color(41, 128, 185)
+                pdf.cell(0, 10, txt="LAMPIRAN VISUAL INSPEKSI", ln=True, align="L")
+                pdf.set_draw_color(200, 200, 200)
+                pdf.line(10, 20, 200, 20)
+                pdf.ln(5)
+
+                x_start = 10
+                y_start = 30
+                x_offset = 95
+                y_offset = 100
+                
+                for idx, file in enumerate(files_to_process):
+                    # Jika sudah mencapai 4 foto di satu halaman, buat halaman baru
+                    if idx > 0 and idx % 4 == 0:
+                        pdf.add_page()
+                        pdf.set_font("Arial", "B", 14)
+                        pdf.set_text_color(41, 128, 185)
+                        pdf.cell(0, 10, txt="LAMPIRAN VISUAL INSPEKSI (Lanjutan)", ln=True, align="L")
+                        pdf.set_draw_color(200, 200, 200)
+                        pdf.line(10, 20, 200, 20)
+                        y_start = 30 # Reset posisi Y untuk halaman baru
+
+                    col = idx % 2
+                    row = (idx % 4) // 2
+                    
+                    x_pos = x_start + (col * x_offset)
+                    y_pos = y_start + (row * y_offset)
+                    
+                    with tempfile.NamedTemporaryFile(delete=False, suffix='.jpg') as tmp_file:
+                        tmp_file.write(file.getvalue())
+                        tmp_path = tmp_file.name
+                    
+                    try:
+                        pdf.image(tmp_path, x=x_pos, y=y_pos, w=90)
+                    except:
+                        pass 
+                    
+                    os.remove(tmp_path)
+                
+                # Menentukan posisi Y untuk Digital Stamp di halaman terakhir foto
+                final_row = ((len(files_to_process) - 1) % 4) // 2
+                final_y_pos = y_start + (final_row * y_offset) + 85 # 85 adalah estimasi tinggi gambar
+                
+                # Jika stamp tidak muat di halaman bawah, paksa buat halaman baru
+                if final_y_pos > 250:
+                    pdf.add_page()
+                    final_y_pos = 20
+
+                pdf.set_y(final_y_pos + 10)
                 pdf.set_draw_color(200, 200, 200)
                 pdf.line(10, pdf.get_y(), 200, pdf.get_y())
                 pdf.ln(5)
@@ -244,8 +313,8 @@ if uploaded_file and brand and serial_number:
                 pdf_bytes = pdf.output(dest='S').encode('latin-1')
                 
                 st.download_button(
-                    label="📥 Download Official Report (PDF)", 
+                    label="📥 Download Heavy-Duty Report (PDF)", 
                     data=pdf_bytes, 
-                    file_name=f"Inspeksi_{serial_number.upper()}_{doc_id}.pdf",
+                    file_name=f"Inspeksi_{serial_number.upper()}_Multi.pdf",
                     mime="application/pdf"
                 )
