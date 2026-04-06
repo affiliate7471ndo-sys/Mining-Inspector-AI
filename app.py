@@ -254,13 +254,14 @@ if uploaded_files and brand and serial_number:
                 pdf.set_draw_color(200, 200, 200)
                 pdf.line(10, 20, 200, 20)
                 
-                x_start = 10
+                # Pengaturan Layout Gambar yang Diperkecil
+                x_start = 15 # Agak ke tengah
                 y_start = 25
-                x_offset = 95
-                y_offset = 110 
+                x_offset = 90
+                y_offset = 100 
                 
-                box_w = 85
-                box_h = 100
+                box_w = 75 # Lebar gambar diperkecil
+                box_h = 90 # Tinggi gambar diperkecil
                 
                 for idx, file in enumerate(files_to_process):
                     if idx > 0 and idx % 4 == 0:
@@ -277,20 +278,19 @@ if uploaded_files and brand and serial_number:
                     x_box = x_start + (col * x_offset)
                     y_box = y_start + (row * y_offset)
                     
-                    # Logika Aspect Ratio Pintar menggunakan PIL
+                    # Logika Aspect Ratio Pintar
                     img_bytes = file.getvalue()
                     img_pil = Image.open(io.BytesIO(img_bytes))
                     img_w, img_h = img_pil.size
                     ratio = img_w / img_h
                     
-                    if ratio > (box_w / box_h): # Foto Landscape / Memanjang ke samping
+                    if ratio > (box_w / box_h): 
                         print_w = box_w
                         print_h = box_w / ratio
-                    else: # Foto Portrait / Memanjang ke bawah
+                    else: 
                         print_h = box_h
                         print_w = box_h * ratio
                     
-                    # Sentralisasi posisi gambar di dalam bingkai bayangan 85x100mm
                     x_draw = x_box + (box_w - print_w) / 2
                     y_draw = y_box + (box_h - print_h) / 2
                     
@@ -299,7 +299,6 @@ if uploaded_files and brand and serial_number:
                         tmp_path = tmp_file.name
                     
                     try:
-                        # Print dengan ukuran akurat yang sudah dimampatkan
                         pdf.image(tmp_path, x=x_draw, y=y_draw, w=print_w, h=print_h)
                     except:
                         pass 
@@ -307,19 +306,23 @@ if uploaded_files and brand and serial_number:
                     os.remove(tmp_path)
                 
                 # --- FIX DIGITAL STAMP OVERLAP ---
-                # Mengunci posisi stamp tepat 40mm dari dasar kertas, TIDAK AKAN PERNAH TABRAKAN!
-                pdf.set_y(-40) 
+                # Matikan auto-page-break sesaat sebelum mencetak footer agar tidak meleset
+                pdf.set_auto_page_break(auto=False)
+                
+                # Kunci posisi persis 30mm dari bawah kertas
+                pdf.set_y(-30) 
                 pdf.set_draw_color(200, 200, 200)
                 pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-                pdf.ln(5)
+                pdf.ln(3)
                 
-                pdf.set_font("Arial", "B", 8)
+                # Font diperkecil menjadi ukuran 7 dan jarak antar baris dirapatkan menjadi 4
+                pdf.set_font("Arial", "B", 7)
                 pdf.set_text_color(0, 0, 0)
-                pdf.cell(0, 5, txt="DIGITAL AUTHORIZATION STAMP", ln=True)
-                pdf.set_font("Arial", "", 8)
-                pdf.cell(0, 5, txt=f"Document ID : TA-{doc_id}-{int(time.time())}", ln=True)
-                pdf.cell(0, 5, txt="Verified By : System VORTEX / Mining Inspector Engine", ln=True)
-                pdf.cell(0, 5, txt="Status      : SYSTEM GENERATED - NO SIGNATURE REQUIRED", ln=True)
+                pdf.cell(0, 4, txt="DIGITAL AUTHORIZATION STAMP", ln=True)
+                pdf.set_font("Arial", "", 7)
+                pdf.cell(0, 4, txt=f"Document ID : TA-{doc_id}-{int(time.time())}", ln=True)
+                pdf.cell(0, 4, txt="Verified By : System VORTEX / Mining Inspector Engine", ln=True)
+                pdf.cell(0, 4, txt="Status      : SYSTEM GENERATED - NO SIGNATURE REQUIRED", ln=True)
                 
                 pdf_bytes = pdf.output(dest='S').encode('latin-1')
                 
