@@ -4,233 +4,124 @@ import base64
 import json
 import time
 import uuid
+import gspread
 from datetime import datetime
 from fpdf import FPDF
+from google.oauth2.service_account import Credentials
 
-# --- 1. KONFIGURASI API ---
+# --- 1. KONFIGURASI API & DATABASE ---
 try:
     api_key = st.secrets["GOOGLE_API_KEY"]
-except:
-    api_key = ""
+    sheet_id = st.secrets["GOOGLE_SHEETS_ID"]
+    # Memuat kredensial Google Sheets
+    gcp_info = json.loads(st.secrets["GCP_SERVICE_ACCOUNT"])
+    scope = ['https://www.googleapis.com/auth/spreadsheets', 'https://www.googleapis.com/auth/drive']
+    creds = Credentials.from_service_account_info(gcp_info, scopes=scope)
+    client = gspread.authorize(creds)
+except Exception as e:
+    st.error(f"⚠️ Masalah Konfigurasi: {str(e)}")
 
-# --- 2. ENGINE DIAGNOSA MURNI (AUTO-DISCOVERY REST API & AUTO-QUOTATION) ---
+# --- 2. ENGINE DIAGNOSA MURNI (REST API AUTO-SNIPER) ---
 def pure_diagnostic_engine(image_bytes, brand, model_name, category):
-    if not api_key:
-        return {"score": 0, "status": "Error", "note": "API Key kosong. Silakan isi di Secrets Streamlit."}
-
     try:
         list_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={api_key}"
         list_res = requests.get(list_url)
-        
-        if list_res.status_code != 200:
-            return {"score": 0, "status": "Error", "note": "Gagal melakukan handshake dengan server Google."}
-            
         available_models = list_res.json().get('models', [])
-        chosen_model = None
-        
-        for m in available_models:
-            methods = m.get('supportedGenerationMethods', [])
-            name = m.get('name', '') 
-            if 'generateContent' in methods:
-                if 'flash' in name or 'pro' in name or 'vision' in name:
-                    chosen_model = name
-                    break
-        
-        if not chosen_model:
-            return {"score": 0, "status": "Error", "note": "API Key Anda tidak memiliki akses ke model Vision/AI."}
+        chosen_model = next((m['name'] for m in available_models if 'generateContent' in m.get('supportedGenerationMethods', []) and ('flash' in m['name'] or 'pro' in m['name'] or 'vision' in m['name'])), None)
 
-        prompt = f"""Anda adalah Inspektur Alat Berat Senior sekaligus Technical Sales Advisor. 
-        Analisa foto {category} unit {brand} {model_name}. 
-        1. Baca indikator panel monitor jika ada (RPM, Temp, Voltase).
-        2. Cari anomali fisik (aus, retak, bocor).
-        3. Berikan skor 0-100, status (Good/Warning/Critical), dan temuan teknis singkat.
-        4. WAJIB: Sebutkan daftar suku cadang yang perlu diganti dan estimasi harga dalam Rupiah (IDR).
-        Format jawaban WAJIB JSON murni: 
-        {{
-            "score": angka, 
-            "status": "teks", 
-            "note": "teks", 
-            "parts_recommendation": [
-                {{"part_name": "Nama Suku Cadang", "est_price": "Harga Rupiah"}}
-            ]
-        }}"""
+        prompt = f"""Anda adalah Inspektur Alat Berat Senior Tatsuo-AIMIX. 
+        Analisa foto {category} unit {brand} {model_name}. Berikan skor 0-100, status, temuan teknis, 
+        dan daftar suku cadang + estimasi harga IDR.
+        Format JSON: {{"score": angka, "status": "teks", "note": "teks", "parts_recommendation": [{{"part_name": "teks", "est_price": "teks"}}]}}"""
 
         base64_img = base64.b64encode(image_bytes).decode('utf-8')
-        payload = {
-            "contents": [{
-                "parts": [
-                    {"text": prompt},
-                    {
-                        "inline_data": {
-                            "mime_type": "image/jpeg",
-                            "data": base64_img
-                        }
-                    }
-                ]
-            }]
-        }
-        headers = {"Content-Type": "application/json"}
+        payload = {"contents": [{"parts": [{"text": prompt}, {"inline_data": {"mime_type": "image/jpeg", "data": base64_img}}]}]}
         
         execute_url = f"https://generativelanguage.googleapis.com/v1beta/{chosen_model}:generateContent?key={api_key}"
-        response = requests.post(execute_url, headers=headers, json=payload)
+        response = requests.post(execute_url, headers={"Content-Type": "application/json"}, json=payload)
         
-        if response.status_code == 200:
-            data = response.json()
-            raw_text = data['candidates'][0]['content']['parts'][0]['text']
-            clean_res = raw_text.replace('```json', '').replace('```', '').strip()
-            return json.loads(clean_res)
-        else:
-            return {"score": 0, "status": "Error", "note": f"Eksekusi API gagal: {response.text}"}
-            
+        clean_res = response.json()['candidates'][0]['content']['parts'][0]['text'].replace('```json', '').replace('```', '').strip()
+        return json.loads(clean_res)
     except Exception as e:
         return {"score": 0, "status": "Error", "note": f"System Error: {str(e)}"}
 
-# --- 3. ANTARMUKA PENGGUNA (UI) ---
-st.set_page_config(page_title="Mining Inspector AI", layout="wide")
+# --- 3. FUNGSI SIMPAN KE DATABASE (GOOGLE SHEETS) ---
+def save_to_database(data_row):
+    try:
+        sheet = client.open_by_key(sheet_id).get_worksheet(0)
+        sheet.append_row(data_row)
+        return True
+    except:
+        return False
+
+# --- 4. ANTARMUKA PENGGUNA (UI) ---
+st.set_page_config(page_title="VORTEX: Mining Inspector AI", layout="wide")
 st.title("🚜 Mining Inspector AI")
-st.subheader("Sistem Analisis Visual Kerusakan Alat Berat")
+st.subheader("Sistem Analisis Visual & Database Inspeksi Tatsuo/AIMIX")
 
 with st.sidebar:
     st.header("📋 Parameter Unit")
-    brand = st.text_input("Merek Unit", placeholder="Contoh: Tatsuo, AIMIX, Komatsu...")
-    model_name = st.text_input("Tipe/Model", placeholder="Contoh: T-200, PC200...")
-    comp = st.selectbox("Komponen Diperiksa", ["Engine Area", "Undercarriage", "Tyre", "Hydraulic"])
-    st.divider()
-    st.warning("⚠️ Instruksi: Foto komponen dari jarak dekat tanpa filter.")
+    brand = st.text_input("Merek Unit", placeholder="Tatsuo / AIMIX")
+    model_name = st.text_input("Tipe/Model", placeholder="Contoh: JP80-9")
+    comp = st.selectbox("Komponen", ["Engine Area", "Undercarriage", "Tyre", "Hydraulic"])
 
-uploaded_file = st.file_uploader("Upload Foto Aktual Komponen", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("Upload Foto Aktual", type=["jpg", "jpeg", "png"])
 
 if uploaded_file and brand:
-    st.image(uploaded_file, caption=f"Konteks Lapangan: {brand.upper()} {model_name.upper()}", width=500)
+    st.image(uploaded_file, caption=f"Unit: {brand.upper()} {model_name.upper()}", width=400)
 
-    if 'result' not in st.session_state:
-        st.session_state.result = None
-    if 'analyzed' not in st.session_state:
-        st.session_state.analyzed = False
+    if 'result' not in st.session_state: st.session_state.result = None
+    if 'analyzed' not in st.session_state: st.session_state.analyzed = False
 
     if st.button("🔍 Jalankan Analisis Visual AI"):
-        with st.status("Menghubungkan ke Server Pusat & Memindai Anomali...", expanded=True) as status:
+        with st.status("Memproses Analisis & Sinkronisasi Database...", expanded=True):
             res = pure_diagnostic_engine(uploaded_file.getvalue(), brand, model_name, comp)
             st.session_state.result = res
             st.session_state.analyzed = True
-            status.update(label="Analisis Selesai", state="complete")
 
     if st.session_state.analyzed and st.session_state.result:
-        st.divider()
         res = st.session_state.result
-        
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Skor Integritas (Health)", f"{res.get('score', 0)}%")
-        
-        with col2:
-            st.subheader("Status Komponen")
-            status_text = res.get('status', 'Unknown')
-            if status_text == "Critical": st.error(status_text)
-            elif status_text == "Warning": st.warning(status_text)
-            elif status_text == "Error": st.error(status_text)
-            else: st.success(status_text)
-            
-        with col3:
-            st.subheader("Temuan Teknis AI")
-            st.write(res.get('note', 'Tidak ada catatan anomali.'))
-
-        parts = res.get('parts_recommendation', [])
-        
-        # --- 4. GENERATOR LAPORAN PDF VISUAL BRANDING ---
         st.divider()
-        st.write("### 📄 Unduh Laporan Inspeksi Digital")
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Health Score", f"{res.get('score', 0)}%")
+        c2.subheader("Status")
+        status_txt = res.get('status', 'Unknown')
+        if status_txt == "Critical": st.error(status_txt)
+        else: st.success(status_txt)
+        c3.subheader("Temuan AI")
+        st.write(res.get('note'))
+
+        # Tampilan Part
+        st.subheader("🛠️ Estimasi Suku Cadang")
+        parts = res.get('parts_recommendation', [])
+        total_est = 0
+        for p in parts:
+            st.info(f"**{p.get('part_name')}** — {p.get('est_price')}")
         
-        if st.button("Generate Laporan & Penawaran Part Resmi"):
-            with st.spinner("Mencetak dokumen resmi dengan Digital Stamp..."):
-                pdf = FPDF()
-                pdf.add_page()
-                
-                # --- HEADER BRANDING (LOGO) ---
-                try:
-                    pdf.image('logo.png', 10, 8, 30) 
-                except:
-                    pass 
-                
-                pdf.set_font("Arial", "B", 18)
-                pdf.set_text_color(41, 128, 185) 
-                pdf.cell(0, 10, txt="OFFICIAL INSPECTION REPORT", ln=True, align="R")
-                
-                pdf.set_font("Arial", "I", 10)
-                pdf.set_text_color(128, 128, 128) 
-                pdf.cell(0, 5, txt="Tatsuo & AIMIX Heavy Equipment Ecosystem", ln=True, align="R")
-                
-                current_time = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                pdf.cell(0, 5, txt=f"Generated: {current_time}", ln=True, align="R")
-                
-                pdf.set_draw_color(41, 128, 185)
-                pdf.set_line_width(0.5)
-                pdf.line(10, 35, 200, 35)
-                pdf.ln(15)
-                
-                # --- KONTEN UTAMA ---
-                pdf.set_text_color(0, 0, 0)
-                pdf.set_fill_color(240, 240, 240) 
-                pdf.set_font("Arial", "B", 12)
-                pdf.cell(0, 10, txt="  DATA UNIT LOKASI", border=1, ln=True, fill=True)
-                
-                pdf.set_font("Arial", "", 11)
-                pdf.cell(0, 8, txt=f"  Merek/Model : {brand.upper()} {model_name.upper()}", border="LR", ln=True)
-                pdf.cell(0, 8, txt=f"  Komponen    : {comp}", border="LR", ln=True)
-                pdf.cell(0, 8, txt=f"  Health Score: {res.get('score', 0)}%  |  Status: {status_text}", border="LRB", ln=True)
-                pdf.ln(8)
-                
-                pdf.set_font("Arial", "B", 12)
-                pdf.cell(0, 10, txt="  TEMUAN TEKNIS LAPANGAN", ln=True)
-                pdf.set_font("Arial", "", 11)
-                safe_note = str(res.get('note', 'Tidak ada catatan.')).encode('latin-1', 'replace').decode('latin-1')
-                pdf.multi_cell(0, 7, txt=safe_note)
-                pdf.ln(8)
-                
-                # --- TABEL SUKU CADANG ---
-                if parts:
-                    pdf.set_font("Arial", "B", 12)
-                    pdf.cell(0, 10, txt="  REKOMENDASI SUKU CADANG & ESTIMASI BIAYA", ln=True)
-                    
-                    pdf.set_font("Arial", "B", 10)
-                    pdf.set_fill_color(41, 128, 185)
-                    pdf.set_text_color(255, 255, 255)
-                    pdf.cell(130, 10, "Deskripsi Part", border=1, fill=True)
-                    pdf.cell(60, 10, "Estimasi Harga (IDR)", border=1, ln=True, fill=True)
-                    
-                    pdf.set_font("Arial", "", 10)
-                    pdf.set_text_color(0, 0, 0)
-                    for p in parts:
-                        part_name = str(p.get('part_name', 'Unknown')).encode('latin-1', 'replace').decode('latin-1')
-                        est_price = str(p.get('est_price', 'N/A')).encode('latin-1', 'replace').decode('latin-1')
-                        pdf.cell(130, 10, part_name, border=1)
-                        pdf.cell(60, 10, est_price, border=1, ln=True)
-                    
-                    pdf.ln(5)
-                    pdf.set_font("Arial", "I", 9)
-                    pdf.set_text_color(128, 128, 128)
-                    pdf.multi_cell(0, 5, txt="*Harga adalah estimasi sistem AI. Hubungi dealer untuk penawaran final.")
-                
-                # --- DIGITAL STAMP FOOTER ---
-                pdf.ln(15)
-                pdf.set_draw_color(200, 200, 200)
-                pdf.line(10, pdf.get_y(), 200, pdf.get_y())
-                pdf.ln(5)
-                
-                doc_id = str(uuid.uuid4()).split('-')[0].upper()
-                pdf.set_font("Arial", "B", 8)
-                pdf.set_text_color(0, 0, 0)
-                pdf.cell(0, 5, txt="DIGITAL AUTHORIZATION STAMP", ln=True)
-                pdf.set_font("Arial", "", 8)
-                pdf.cell(0, 5, txt=f"Document ID : TA-{doc_id}-{int(time.time())}", ln=True)
-                pdf.cell(0, 5, txt="Verified By : System VORTEX / Mining Inspector Engine", ln=True)
-                pdf.cell(0, 5, txt="Status      : SYSTEM GENERATED - NO SIGNATURE REQUIRED", ln=True)
-                
-                pdf_bytes = pdf.output(dest='S').encode('latin-1')
-                
-                st.success("Dokumen Resmi berhasil dicetak!")
-                st.download_button(
-                    label="📥 Download Official Report (PDF)", 
-                    data=pdf_bytes, 
-                    file_name=f"Inspeksi_{brand}_{model_name}_{doc_id}.pdf",
-                    mime="application/pdf"
-                )
+        # --- PDF & DATABASE TRIGGER ---
+        st.divider()
+        if st.button("Cetak Laporan & Simpan ke Database"):
+            doc_id = f"TA-{str(uuid.uuid4())[:8].upper()}"
+            curr_date = datetime.now().strftime('%Y-%m-%d %H:%M')
+            
+            # Simpan ke Google Sheets
+            data_to_save = [curr_date, doc_id, brand.upper(), model_name.upper(), comp, f"{res.get('score')}%", status_txt, "Terlampir di PDF"]
+            db_status = save_to_database(data_to_save)
+            
+            # Buat PDF
+            pdf = FPDF()
+            pdf.add_page()
+            try: pdf.image('logo.png', 10, 8, 30)
+            except: pass
+            pdf.set_font("Arial", "B", 16)
+            pdf.cell(0, 10, txt="OFFICIAL INSPECTION & DATABASE RECORD", ln=True, align="R")
+            pdf.ln(20)
+            pdf.set_font("Arial", "B", 12)
+            pdf.cell(0, 10, txt=f"DOCUMENT ID: {doc_id}", ln=True)
+            pdf.set_font("Arial", "", 11)
+            pdf.cell(0, 8, txt=f"Unit: {brand} {model_name} | Date: {curr_date}", ln=True)
+            pdf.multi_cell(0, 8, txt=f"Analisis: {res.get('note')}")
+            
+            pdf_bytes = pdf.output(dest='S').encode('latin-1')
+            st.success("✅ Data berhasil masuk ke Database Utama AZARINDO!") if db_status else st.warning("⚠️ PDF Siap, tapi koneksi Database gagal.")
+            st.download_button("📥 Unduh Laporan (PDF)", data=pdf_bytes, file_name=f"Report_{doc_id}.pdf")
